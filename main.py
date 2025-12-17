@@ -160,19 +160,7 @@ def init_screen(SHOW_ORBIT, BORDER):
 def refresh_screen(SHOW_ORBIT,BORDER):
     init_screen(SHOW_ORBIT,BORDER)
 
-
-def main():
-    SHOW_ORBIT = 1
-    BORDER = 0
-    SPEED = 50
-    run = True
-    clock = pygame.time.Clock()
-    init_screen(SHOW_ORBIT,BORDER)
-
-    NUMBER_PARTICULES_POSITIVE = 0
-    #NUMBER_PARTICULES_NEGATIVE = 50
-
-    tab_particules = []
+def init_planet(tab_part):
 
     mercury  = Particule(0.39*AU,0,6,DARK_GREY,0.33*10**24,0)
     #mercury.y_vel = -170496 *1.6
@@ -208,15 +196,30 @@ def main():
     neptune.orbit.append((neptune.x, neptune.y))
     sun = Particule(0,0, 20, YELLOW, 1.98892 * 10**30,0)
 
-    tab_particules.append(sun)
-    tab_particules.append(mercury)
-    tab_particules.append(venus)
-    tab_particules.append(earth)
-    tab_particules.append(mars)
-    tab_particules.append(jupiter)
-    tab_particules.append(saturn)
-    tab_particules.append(neptune)
-    tab_particules.append(uranus)
+    tab_part.append(sun)
+    tab_part.append(mercury)
+    tab_part.append(venus)
+    tab_part.append(earth)
+    tab_part.append(mars)
+    tab_part.append(jupiter)
+    tab_part.append(saturn)
+    tab_part.append(neptune)
+    tab_part.append(uranus)
+
+def main():
+    SHOW_ORBIT = 1
+    BORDER = 0
+    SPEED = 50
+    run = True
+    clock = pygame.time.Clock()
+    init_screen(SHOW_ORBIT,BORDER)
+
+    NUMBER_PARTICULES_POSITIVE = 0
+    #NUMBER_PARTICULES_NEGATIVE = 50
+
+    tab_particules = []
+
+    init_planet(tab_particules)
 
     for i in range(1, NUMBER_PARTICULES_POSITIVE+1):
         new = Particule(random.randint(int(-20*AU), int(20*AU)), random.randint(int(-20*AU), int(20*AU)), 5, RED, 10*10**28, 1)
