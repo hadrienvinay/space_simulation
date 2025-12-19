@@ -36,7 +36,7 @@ text_moins = FONT.render('-', True, BLACK)
 #AU = 149597871*1000
 AU = 149.6e6 * 1000
 G = 6.67428e-11
-SCALE = 10 / AU # 1AU = 500 pixel
+SCALE = 150 / AU # 1AU = 500 pixel
 TIMESTEP = 3600 *24 # 1 day
 
 class Particule:
@@ -234,14 +234,14 @@ def main():
     while run:
         clock.tick(SPEED)
         timer += 1
-        print(timer)
+        #print(timer)
         init_screen(SHOW_ORBIT,BORDER)
         mouse = pygame.mouse.get_pos()
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 run = False
             if event.type == pygame.MOUSEBUTTONDOWN:
-                print(mouse)
+                #print(mouse)
             # if the mouse is clicked on the button refesh, clean screen
                 if 10 <= mouse[0] <= 110 and 10 <= mouse[1] <= 60:
                     if SHOW_ORBIT == 1:

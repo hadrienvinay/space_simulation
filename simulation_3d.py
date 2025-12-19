@@ -10,7 +10,7 @@ WIDTH, HEIGHT = 1000, 800
 AU = 149.6e6 * 1000
 G = 6.67428e-11
 SCALE = 50 / AU # 1AU = 500 pixel
-TIMESTEP = 3600 *24 # 1 day
+TIMESTEP = 3600 *24 *2# 1 day
 
 WHITE = (255,255,255)
 YELLOW = (255,255,0)
@@ -78,13 +78,15 @@ class Planet:
         distance = math.sqrt(distance_x ** 2 + distance_y ** 2)
         distance2 = math.sqrt(distance_x ** 2 + distance_y ** 2 + distance_z **2)
         force = G * self.mass * other.mass / distance ** 2
-        force2 =  G * self.mass * other.mass / distance2 ** 3
+        force2 =  G * self.mass * other.mass / distance2 ** 2
         theta = math.atan2(distance_y, distance_x)
-        force_x = math.cos(theta) * force
-        force_y = math.sin(theta) * force
-        force_z = math.cos(180-theta) * force2
+        beta = math.atan2(distance_z, distance_y)
+        force_x = math.cos(theta) * force2
+        force_y = math.sin(theta) * force2
+        force_z = math.sin(beta) * force2
+        #force_z = 0
+        print(force2)
         #force_z = math.cos(theta) * force
-        force_z = 0
         return force_x, force_y, force_z
 
     def draw_orbit(self):
@@ -92,7 +94,7 @@ class Planet:
             updated_points = []
             #glTranslatef(0, 0,0) #Move to the place
             glTranslatef(-self.x*SCALE, -self.y*SCALE, -self.z*SCALE) #Move to the place
-            print(-self.x*SCALE, -self.y*SCALE, -self.z*SCALE)
+            #print(-self.x*SCALE, -self.y*SCALE, -self.z*SCALE)
             glBegin(GL_LINES) 
             glColor3f (self.color[0]/255,self.color[1]/255,self.color[2]/255)
             i = 0
@@ -145,6 +147,7 @@ def init_planet(tab_planets):
     neptune.y_vel = -5.43 * 1000
     neptune.orbit.append((neptune.x, neptune.y, neptune.z))
     sun = Planet(0,0,0,8, WHITE, 1.98892 * 10**30,0,1)
+    #sun.z_vel = 1 * 10
 
     tab_planets.append(sun)
     tab_planets.append(mercury)
@@ -193,7 +196,8 @@ def main():
     gluPerspective(100, (display[0]/display[1]), 1,500.0)
 
     glMatrixMode(GL_MODELVIEW)
-    gluLookAt(-50, 150,220, 0, 0, 0, 0, 0, 1)
+    #gluLookAt(-0, 150,220, 0, 0, 0, 0, 0, 1)
+    gluLookAt(-0, 50,20, 0, 0, 0, 0, 0, 1)
     viewMatrix = glGetFloatv(GL_MODELVIEW_MATRIX)
     glLoadIdentity()
     move = 0
@@ -261,7 +265,7 @@ def main():
         #glFlush()
         glPopMatrix()
         pygame.display.flip() #Update the screen
-        pygame.time.wait(20)
+        pygame.time.wait(10)
 
     pygame.quit()
 
