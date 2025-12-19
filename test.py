@@ -27,6 +27,16 @@ GREEN = (0,240,0)
 DARK_GREY = (80,78,81)
 RED = (255,20,0)
 
+WHITE_3D = (1,1,1,1)
+YELLOW_3D = (1,1,0,1)
+BLUE_3D = (0,0,1,1)
+BLACK_3D = (0,0,0,1)
+ORANGE_3D = (1,0.5,0,1)
+GREEN_3D = (0,0.92,0,1)
+DARK_GREY_3D = (0.3,0.29,0.3,1)
+RED_3D = (1,0.1,0,1)
+
+
 # Fonction pour dessiner un rectangle 2D (bouton)
 def draw_2d_rect(x, y, width, height, color):
     glColor4f(*color)
@@ -283,10 +293,10 @@ def handle_keys():
     if keypress[pygame.K_e]:
         glTranslatef(0,0.5,0)
     a = pygame.mouse.get_pressed()
-    if a[0] == 1:
-        glTranslatef(0,0,2)
-    if a[2] == 1:
-        glTranslatef(0,0,-2)
+    #if a[0] == 1:
+        #glTranslatef(0,0,2)
+    #if a[2] == 1:
+        #glTranslatef(0,0,-2)
 
 class Button:
     def __init__(self, rect, text, color,font):
@@ -299,7 +309,18 @@ class Button:
         self.y = rect.y
         self.width = rect.width
         self.height = rect.height
+
+    def update_button(self,text,font):
+        #self.color = color
+        self.text = font.render("%s"%text, False, self.color)
+        self.data = pygame.image.tostring(self.text, "RGBA", True)
         
+def reset(tab_planets):
+    del tab_planets
+    new_tab = []
+    init_planet(new_tab)
+    return new_tab
+
 
 def main():
     pygame.init()
@@ -311,33 +332,19 @@ def main():
     text_surface = font.render("Système solaire 2025", False, (255, 215, 255, 1))
     text_width, text_height = text_surface.get_size()
     text_data = pygame.image.tostring(text_surface, "RGBA", True)
-    list_button = []
     
     button_orbit = Button (pygame.Rect(WIDTH-180, HEIGHT-70, 150, 50),
-                           font.render("Orbite", False, (0, 0, 0, 255)),
-                           (0,1,1,1),
+                           font.render("Orbit ON", False, (0, 0, 0, 0)),
+                           RED_3D,
                            pygame.font.SysFont("comicsans", 20))
     button_reset = Button (pygame.Rect(WIDTH-180, HEIGHT-150, 150, 50),
                            font.render("Reset", False, (0, 0, 0, 255)),
-                           (0,1,1,1),
+                           GREEN_3D,
                            pygame.font.SysFont("comicsans", 20))
     
-    # Bouton (coordonnées écran)
-    #button_orbit = pygame.Rect(WIDTH-180, HEIGHT-70, 150, 50)
-    #button_color = (0,1,1,1)
-    #button_text_surface = font.render("Orbite", False, (0, 0, 0, 255))
-    #button_text_data = pygame.image.tostring(button_text_surface, "RGBA", True)
-    button_text = pygame.Rect(WIDTH-180, HEIGHT-70, 150, 50)
-    button_color = (0,1,1,1)
-    button_text_surface = font.render("Orbite", False, (0, 0, 0, 255))
-    button_text_data = pygame.image.tostring(button_text_surface, "RGBA", True)
-
     buttons_list = [button_orbit,button_reset]
 
-
     glEnable(GL_DEPTH_TEST)
-    #sphere = gluNewQuadric() #Create new sphere
-    #sphere2 = gluNewQuadric() #Create new sphere
     glMatrixMode(GL_PROJECTION)
     gluPerspective(100, (display[0]/display[1]), 1,1000)
     glMatrixMode(GL_MODELVIEW)
@@ -374,11 +381,20 @@ def main():
                     # Conversion des coordonnées OpenGL (viewport)
                     viewport = glGetIntegerv(GL_VIEWPORT)
                     mouse_y = viewport[3] - mouse_y  # Inversion Y
-                    if (buttons_list[button_orbit].x <= mouse_x <= buttons_list[0].x + buttons_list[0].width and
-                        buttons_list[0].y <= mouse_y <= buttons_list[0].y + buttons_list[0].height):
-                        button_clicked = True
-                        buttons_list[0].color = (1,1,1,1) if ORBIT_ON == 1 else (0,1,1,1)
-                        ORBIT_ON = 0 if ORBIT_ON == 1 else 1
+                    if (button_orbit.x <= mouse_x <= button_orbit.x + button_orbit.width and
+                        button_orbit.y <= mouse_y <= button_orbit.y + button_orbit.height):
+                        if ORBIT_ON:
+                            button_orbit.color = WHITE_3D
+                            button_orbit.update_button("ORBIT OFF",font)
+                            ORBIT_ON = 0
+                        else: 
+                            button_orbit.color = RED_3D
+                            button_orbit.update_button("ORBIT ON",font)
+                            ORBIT_ON = 1
+                    if (button_reset.x <= mouse_x <= button_reset.x + button_reset.width and
+                    button_reset.y <= mouse_y <= button_reset.y + button_reset.height):
+                        tab_planets = reset(tab_planets)
+
 
         #move += 1
         # init model view matrix
@@ -387,7 +403,7 @@ def main():
         glPushMatrix()
         glLoadIdentity()
         
-        # apply the movement of the camera
+        # apply the movement of the camera with keyboard input
         handle_keys()
         
         # multiply the current matrix by the get the new view matrix and store the final vie matrix 
@@ -402,19 +418,11 @@ def main():
         
         glPushMatrix()
 
-        #glTranslatef(10, 0, 0) #Move to the place
-        #glColor4f(0.5, 0.2, 0.2, 1) #Put color
-        #gluSphere(sphere,1,16,32) #Draw sphere
-        #glTranslatef(0, 0,0) #Move to the place
-        #glColor4f(0.5, 1, 0.4, 1) #Put color
-        #gluSphere(sphere,2,16,32) #Draw sphere
-        #glBindTexture(GL_TEXTURE_2D,texture)
+        #draw images, axys and grid
         draw_image(texture)
         draw_axys()
         draw_grid()
 
-
-        #screen.blit(img, [0,0])
         for planet in tab_planets:  
             planet.update_position(tab_planets)
             #glTranslatef(-planet.x*SCALE, -planet.y*SCALE, -planet.z*SCALE) #Move to the place
@@ -423,8 +431,6 @@ def main():
             if(ORBIT_ON):
             #if  planet.sun == 0:
                 planet.draw_orbit()
-
-        #glFlush()
 
         glPopMatrix()
 
@@ -448,7 +454,7 @@ def main():
         for button in buttons_list:
             draw_2d_rect(button.x, button.y, button.width, button.height, button.color)
             glColor3f(*WHITE)
-            glLineWidth(2)
+            glLineWidth(4)
             glBegin(GL_LINE_LOOP)
             glVertex2f(button.x, button.y)
             glVertex2f(button.x + button.width, button.y)
