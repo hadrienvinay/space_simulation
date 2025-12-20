@@ -16,7 +16,7 @@ WIDTH, HEIGHT = 1200, 900
 AU = 149.6e6 * 1000
 G = 6.67428e-11
 SCALE = 50 / AU # 1AU = 500 pixel
-TIMESTEP = 3600 *24 *2# 1 day
+TIMESTEP = 3600 *24  # 1 day
 
 WHITE = (255,255,255)
 YELLOW = (255,255,0)
@@ -47,8 +47,14 @@ def draw_2d_rect(x, y, width, height, color):
     glVertex2f(x, y + height)
     glEnd()
 
+# Fonction pour charger une image
 def load_image(filename):
-    image = pygame.image.load(filename).convert_alpha()
+    try :
+        image = pygame.image.load(filename).convert_alpha()
+    except IOError:
+        print("can't load file %s"%filename)
+        return(0)
+
     width, height = image.get_rect().size
     data = pygame.image.tobytes(image,"RGBA")
     # Génération d'un identifiant de texture
@@ -73,6 +79,7 @@ def load_image(filename):
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
     return(texture)
 
+# Fonction pour dessiner une image (mode rectangle)
 def draw_image(texture):
     glDisable(GL_DEPTH_TEST)
     glEnable(GL_TEXTURE_2D)
@@ -93,8 +100,7 @@ def draw_image(texture):
     glEnable(GL_DEPTH_TEST)
 
 class Planet:
-
-    def __init__(self, x, y, z, radius, color, mass, type, sun):
+    def __init__(self, x, y, z, radius, color, mass, type, sun, texture, rotation):
         self.x = x
         self.y = y
         self.z = z
@@ -103,6 +109,9 @@ class Planet:
         self.mass = mass
         self.type = type
         self.sun = sun
+        self.texture = texture
+        self.rotation = rotation
+        self.angle = 0
 
         self.orbit = []
 
@@ -117,10 +126,25 @@ class Planet:
         x = self.x * SCALE 
         y = self.y * SCALE 
         z = self.z * SCALE 
+        glPushMatrix()
         sphere = gluNewQuadric() #Create new sphere
-        glTranslatef(x, y, z) #Move to the place
-        glColor4f(self.color[0]/255,self.color[1]/255,self.color[2]/255,0) #Put color
+        glTranslatef(x, y, z) #Move to the placegluSphere(sphere,self.radius,32,32) #Draw sphere
+        glRotatef(self.angle,0,0,1)
+        self.angle += self.rotation
+        if self.texture == 0:
+            glColor4f(self.color[0]/255,self.color[1]/255,self.color[2]/255,0) #Put default color
+        else :
+            glColor4f(1,1,1,0) #Put default color
+            glEnable(GL_TEXTURE_2D)
+            glBindTexture(GL_TEXTURE_2D, self.texture)
+        
+        gluQuadricTexture(sphere, GL_TRUE)  # Active le mappage de texture si l'image est chargée
         gluSphere(sphere,self.radius,32,32) #Draw sphere
+        gluDeleteQuadric(sphere)
+        if self.texture != 0:
+            glDisable(GL_TEXTURE_2D)
+        glPopMatrix()
+
 
     def update_position(self,planets):
         total_fx = total_fy = total_fz = 0
@@ -178,6 +202,7 @@ class Planet:
                     glVertex3f(self.orbit[i][0]*SCALE,self.orbit[i][1]*SCALE,self.orbit[i][2]*SCALE)
                     #glVertex3f(x,y,z)
                 i += 1
+                if(i == 100) : continue
 
             glEnd()
 
@@ -194,50 +219,60 @@ def force_gravite(x,y):
     return coef
 
 def init_planet(tab_planets):
-    mercury  = Planet(0.39*AU,0,0,2,DARK_GREY,0.33*10**24,0,0)
+    texture_mercury = load_image("textures/mercury.jpg")
+    mercury  = Planet(0.39*AU,0,0,2,DARK_GREY,0.33*10**24,0,0,texture_mercury,8)
     #mercury.y_vel = -170496 *1.6
     mercury.y_vel = -47.4 * 1000
     mercury.orbit.append((mercury.x, mercury.y, mercury.z))
-    venus    = Planet(0.72*AU,0,0,3,GREEN,4.87*10**24,0,0)
+    texture_venus = load_image("textures/venus.jpg")
+    venus    = Planet(0.72*AU,0,0,3,GREEN,4.87*10**24,0,0,texture_venus,0.01)
     #venus.x_vel = 12600* 1.4
     venus.y_vel = -35.02 * 1000
     venus.orbit.append((venus.x, venus.y, venus.z))
-    earth    = Planet(1*AU,0,0,4,BLUE,5.97*10**24,0,0)
+    texture_earth = load_image("textures/earth.jpg")
+    earth    = Planet(1*AU,0,0,4,BLUE,5.97*10**24,0,0,texture_earth,10)
     #earth.y_vel = -107206* 1.3
     earth.y_vel = -29.783 * 1000
     earth.orbit.append((earth.x, earth.y, earth.z))
-    mars     = Planet(1.52*AU,0,0,3,RED,0.642*10**24,0,0)
+    texture_mars = load_image("textures/mars.jpg")
+    mars     = Planet(1.52*AU,0,0,3,RED,0.642*10**24,0,0,texture_mars,0)
     #mars.y_vel = -86425* 1.6
     mars.y_vel = -24.077 * 1000
     mars.orbit.append((mars.x, mars.y,mars.z))
-    jupiter  = Planet(5.2*AU,0,0,8,ORANGE,1.9*10**27,0,0)
+    texture_jupiter = load_image("textures/jupiter.jpg")
+    jupiter  = Planet(5.2*AU,0,0,8,ORANGE,1.9*10**27,0,0,texture_jupiter,0)
     #jupiter.y_vel = -47052* 1.5
     jupiter.y_vel = -13.06* 1000
     jupiter.orbit.append((jupiter.x, jupiter.y,jupiter.z))
-    saturn   = Planet(9.55*AU,0,0,7,YELLOW,1.9*10**27,0,0)
+    texture_saturn = load_image("textures/saturn.jpg")
+    saturn   = Planet(9.55*AU,0,0,7,YELLOW,1.9*10**27,0,0,texture_saturn,0)
     #saturn.y_vel = -34848* 1.5
     saturn.y_vel = -9.68 * 1000
     saturn.orbit.append((saturn.x, saturn.y, saturn.z))
-    uranus   = Planet(19.22*AU,0,0,6,BLUE,568*10**24,0,0)
+    uranus   = Planet(19.22*AU,0,0,6,BLUE,568*10**24,0,0,0,0)
     #uranus.y_vel = -32480
     uranus.y_vel = -6.80 * 1000
     uranus.orbit.append((uranus.x, uranus.y, uranus.z))
-    neptune  = Planet(30.11*AU,0,0,5,WHITE,0.33*10**24,0,0)
+    neptune  = Planet(30.11*AU,0,0,5,WHITE,0.33*10**24,0,0,0,0)
     #neptune.y_vel = -19548
     neptune.y_vel = -5.43 * 1000
     neptune.orbit.append((neptune.x, neptune.y, neptune.z))
-    sun = Planet(0,0,0,8, WHITE, 1.98892 * 10**30,0,1)
-    sun.z_vel = 1 * 1000
+    texture_sun = load_image("textures/sun2.jpg")
+    sun = Planet(0,0,0,8, WHITE, 1.98892 * 10**30,0,1,texture_sun,-1)
+    #sun2 = Planet(5*AU,0.5*AU,0,8, WHITE, 1.98892 * 10**30,0,1)
+    #sun2.y_vel = -10 * 1000
+    #sun.z_vel = 1 * 1000
 
     tab_planets.append(sun)
+    #tab_planets.append(sun2)
     tab_planets.append(mercury)
     tab_planets.append(venus)
     tab_planets.append(earth)
     tab_planets.append(mars)
     tab_planets.append(jupiter)
     tab_planets.append(saturn)
-    tab_planets.append(uranus)
-    tab_planets.append(neptune)
+    #tab_planets.append(uranus)
+    #tab_planets.append(neptune)
 
 def draw_axys():
     glBegin(GL_LINES)
@@ -321,13 +356,12 @@ def reset(tab_planets):
     init_planet(new_tab)
     return new_tab
 
-
 def main():
     pygame.init()
     display = (WIDTH, HEIGHT)
     pygame.display.set_mode(display, DOUBLEBUF | OPENGL)
     pygame.display.set_caption("BIG BANG Simulation")
-
+    clock = pygame.time.Clock()
     font = pygame.font.SysFont("comicsans", 20)
     text_surface = font.render("Système solaire 2025", False, (255, 215, 255, 1))
     text_width, text_height = text_surface.get_size()
@@ -336,13 +370,32 @@ def main():
     button_orbit = Button (pygame.Rect(WIDTH-180, HEIGHT-70, 150, 50),
                            font.render("Orbit ON", False, (0, 0, 0, 0)),
                            RED_3D,
-                           pygame.font.SysFont("comicsans", 20))
+                           font)
     button_reset = Button (pygame.Rect(WIDTH-180, HEIGHT-150, 150, 50),
                            font.render("Reset", False, (0, 0, 0, 255)),
                            GREEN_3D,
+                           font)
+    button_time = Button (pygame.Rect(WIDTH-180, HEIGHT-220, 150, 50),
+                           font.render("Time", False, (0, 0, 0, 255)),
+                           YELLOW_3D,
+                           font)
+    button_speed = Button (pygame.Rect(WIDTH-180, HEIGHT-290, 150, 50),
+                           font.render("Speed", False, (0, 0, 0, 255)),
+                           BLUE_3D,
                            pygame.font.SysFont("comicsans", 20))
-    
-    buttons_list = [button_orbit,button_reset]
+    button_plus = Button (pygame.Rect(WIDTH-176, HEIGHT-282, 30, 30),
+                           font.render("+", False, (0, 0, 0, 255)),
+                           WHITE_3D,
+                           font)
+    button_minus = Button (pygame.Rect(WIDTH-65, HEIGHT-282, 30, 30),
+                           font.render("-", False, (0, 0, 0, 255)),
+                           WHITE_3D,
+                           font)
+    button_quit = Button (pygame.Rect(WIDTH-180, 20, 150, 50),
+                           font.render("QUIT", False, (0, 0, 0, 255)),
+                           WHITE_3D,
+                           font)
+    buttons_list = [button_orbit,button_reset,button_time,button_speed,button_plus,button_minus,button_quit]
 
     glEnable(GL_DEPTH_TEST)
     glMatrixMode(GL_PROJECTION)
@@ -350,13 +403,15 @@ def main():
     glMatrixMode(GL_MODELVIEW)
     glEnable(GL_TEXTURE_2D)
     #gluLookAt(-0, 150,220, 0, 0, 0, 0, 0, 1)
-    gluLookAt(-0, 50,20, 0, 0, 0, 0, 0, 1)
+    gluLookAt(10, -50,20, 0, 0, 0, 0, 0, 1)
     viewMatrix = glGetFloatv(GL_MODELVIEW_MATRIX)
     glLoadIdentity()
 
+
     #Default Variables, Orbit ON
     ORBIT_ON = 1
-    #move = 0
+    SPEED = 60
+    move = 0
     run = True
     tab_planets = []
     init_planet(tab_planets)
@@ -394,9 +449,28 @@ def main():
                     if (button_reset.x <= mouse_x <= button_reset.x + button_reset.width and
                     button_reset.y <= mouse_y <= button_reset.y + button_reset.height):
                         tab_planets = reset(tab_planets)
+                        move = 0
+                        #glLoadIdentity()
+                        #gluLookAt(10, -50,20, 0, 0, 0, 0, 0, 1)
+                    if (button_plus.x <= mouse_x <= button_plus.x + button_plus.width and
+                    button_plus.y <= mouse_y <= button_plus.y + button_plus.height):
+                            print("PLUS")
+                            if (SPEED<500):
+                                SPEED *= 2
+                                button_speed.update_button("x %.2f"%(SPEED/60),font)
+                    if (button_minus.x <= mouse_x <= button_minus.x + button_minus.width and
+                    button_minus.y <= mouse_y <= button_minus.y + button_minus.height):
+                            if (SPEED>9):
+                                SPEED /=2
+                                button_speed.update_button("x %.2f"%(SPEED/60),font)
+                    if (button_quit.x <= mouse_x <= button_quit.x + button_quit.width and
+                    button_quit.y <= mouse_y <= button_quit.y + button_quit.height):
+                            run = False
 
-
-        #move += 1
+        move += 1
+        #display info about the simulation elapsed_time since the start of simulation  
+        elapsed_time = move  / 360
+        button_time.update_button("time : %.2f ans" % elapsed_time,font)
         # init model view matrix
         glLoadIdentity()
         # init the view matrix
@@ -427,7 +501,7 @@ def main():
             planet.update_position(tab_planets)
             #glTranslatef(-planet.x*SCALE, -planet.y*SCALE, -planet.z*SCALE) #Move to the place
             planet.draw()
-            glTranslatef(-planet.x*SCALE, -planet.y*SCALE, -planet.z*SCALE)
+            #glTranslatef(-planet.x*SCALE, -planet.y*SCALE, -planet.z*SCALE)
             if(ORBIT_ON):
             #if  planet.sun == 0:
                 planet.draw_orbit()
@@ -454,7 +528,7 @@ def main():
         for button in buttons_list:
             draw_2d_rect(button.x, button.y, button.width, button.height, button.color)
             glColor3f(*WHITE)
-            glLineWidth(4)
+            glLineWidth(2)
             glBegin(GL_LINE_LOOP)
             glVertex2f(button.x, button.y)
             glVertex2f(button.x + button.width, button.y)
@@ -475,7 +549,8 @@ def main():
         glPopMatrix()
 
         pygame.display.flip() #Update the screen
-        pygame.time.wait(10)
+        clock.tick(SPEED)
+        #pygame.time.wait(SPEED)
 
     pygame.quit()
 
