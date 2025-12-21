@@ -16,7 +16,7 @@ WIDTH, HEIGHT = 1200, 900
 AU = 149.6e6 * 1000
 G = 6.67428e-11
 SCALE = 50 / AU # 1AU = 500 pixel
-TIMESTEP = 3600 *24  # 1 day
+TIMESTEP = 3600 * 24   # 1 day
 
 WHITE = (255,255,255)
 YELLOW = (255,255,0)
@@ -145,7 +145,6 @@ class Planet:
             glDisable(GL_TEXTURE_2D)
         glPopMatrix()
 
-
     def update_position(self,planets):
         total_fx = total_fy = total_fz = 0
         for planet in planets:
@@ -164,7 +163,6 @@ class Planet:
         self.y += self.y_vel * TIMESTEP
         self.z += self.z_vel * TIMESTEP
         self.orbit.append((self.x, self.y,self.z))
-
     
     def attraction(self, other):
         other_x, other_y, other_z = other.x, other.y, other.z
@@ -222,43 +220,47 @@ def init_planet(tab_planets):
     texture_mercury = load_image("textures/mercury.jpg")
     mercury  = Planet(0.39*AU,0,0,2,DARK_GREY,0.33*10**24,0,0,texture_mercury,8)
     #mercury.y_vel = -170496 *1.6
-    mercury.y_vel = -47.4 * 1000
+    mercury.y_vel = 47.4 * 1000
     mercury.orbit.append((mercury.x, mercury.y, mercury.z))
     texture_venus = load_image("textures/venus.jpg")
     venus    = Planet(0.72*AU,0,0,3,GREEN,4.87*10**24,0,0,texture_venus,0.01)
     #venus.x_vel = 12600* 1.4
-    venus.y_vel = -35.02 * 1000
+    venus.y_vel = 35.02 * 1000
     venus.orbit.append((venus.x, venus.y, venus.z))
     texture_earth = load_image("textures/earth.jpg")
     earth    = Planet(1*AU,0,0,4,BLUE,5.97*10**24,0,0,texture_earth,10)
     #earth.y_vel = -107206* 1.3
-    earth.y_vel = -29.783 * 1000
+    earth.y_vel = 29.783 * 1000 #vitesse rotation autour soleil : 30km/s
     earth.orbit.append((earth.x, earth.y, earth.z))
+    #texture_moon = load_image("textures/moon.jpg")
+    #moon    = Planet(earth.x - 0.0026*AU, 0,0,0.1,DARK_GREY,7.347*10**22,0,0,texture_moon,8)
+    #moon.y_vel = earth.y_vel + 1.02 * 1000 #v orbitale : 1.02km/s
+    #moon.orbit.append((moon.x, moon.y, moon.z))
     texture_mars = load_image("textures/mars.jpg")
     mars     = Planet(1.52*AU,0,0,3,RED,0.642*10**24,0,0,texture_mars,0)
     #mars.y_vel = -86425* 1.6
-    mars.y_vel = -24.077 * 1000
+    mars.y_vel = 24.077 * 1000
     mars.orbit.append((mars.x, mars.y,mars.z))
     texture_jupiter = load_image("textures/jupiter.jpg")
-    jupiter  = Planet(5.2*AU,0,0,8,ORANGE,1.9*10**27,0,0,texture_jupiter,0)
+    jupiter  = Planet(-5.2*AU,0,0,8,ORANGE,1.9*10**27,0,0,texture_jupiter,0)
     #jupiter.y_vel = -47052* 1.5
     jupiter.y_vel = -13.06* 1000
     jupiter.orbit.append((jupiter.x, jupiter.y,jupiter.z))
     texture_saturn = load_image("textures/saturn.jpg")
-    saturn   = Planet(9.55*AU,0,0,7,YELLOW,1.9*10**27,0,0,texture_saturn,0)
+    saturn   = Planet(-9.55*AU,0,0,7,YELLOW,1.9*10**27,0,0,texture_saturn,0)
     #saturn.y_vel = -34848* 1.5
     saturn.y_vel = -9.68 * 1000
     saturn.orbit.append((saturn.x, saturn.y, saturn.z))
     uranus   = Planet(19.22*AU,0,0,6,BLUE,568*10**24,0,0,0,0)
     #uranus.y_vel = -32480
-    uranus.y_vel = -6.80 * 1000
+    uranus.y_vel = 6.80 * 1000
     uranus.orbit.append((uranus.x, uranus.y, uranus.z))
     neptune  = Planet(30.11*AU,0,0,5,WHITE,0.33*10**24,0,0,0,0)
     #neptune.y_vel = -19548
-    neptune.y_vel = -5.43 * 1000
+    neptune.y_vel = 5.43 * 1000
     neptune.orbit.append((neptune.x, neptune.y, neptune.z))
     texture_sun = load_image("textures/sun2.jpg")
-    sun = Planet(0,0,0,8, WHITE, 1.98892 * 10**30,0,1,texture_sun,-1)
+    sun = Planet(0,0,0,8, WHITE, 1.98892 * 10**30,0,1,texture_sun,1)
     #sun2 = Planet(5*AU,0.5*AU,0,8, WHITE, 1.98892 * 10**30,0,1)
     #sun2.y_vel = -10 * 1000
     #sun.z_vel = 1 * 1000
@@ -316,7 +318,7 @@ def draw_text(x,y):
 def handle_keys():
     keypress = pygame.key.get_pressed()
     if keypress[pygame.K_z]:
-            glTranslatef(0,0,0.5)
+        glTranslatef(0,0,0.5)
     if keypress[pygame.K_s]:
         glTranslatef(0,0,-0.5)
     if keypress[pygame.K_d]:
@@ -415,7 +417,7 @@ def main():
     run = True
     tab_planets = []
     init_planet(tab_planets)
-    texture = load_image('milky.jpg')
+    texture = load_image('textures/milky.jpg')
     
     while run:
         for event in pygame.event.get():
@@ -451,6 +453,7 @@ def main():
                         tab_planets = reset(tab_planets)
                         move = 0
                         #glLoadIdentity()
+                        #glPushMatrix()
                         #gluLookAt(10, -50,20, 0, 0, 0, 0, 0, 1)
                     if (button_plus.x <= mouse_x <= button_plus.x + button_plus.width and
                     button_plus.y <= mouse_y <= button_plus.y + button_plus.height):
@@ -469,7 +472,7 @@ def main():
 
         move += 1
         #display info about the simulation elapsed_time since the start of simulation  
-        elapsed_time = move  / 360
+        elapsed_time = move / 360
         button_time.update_button("time : %.2f ans" % elapsed_time,font)
         # init model view matrix
         glLoadIdentity()
@@ -550,7 +553,6 @@ def main():
 
         pygame.display.flip() #Update the screen
         clock.tick(SPEED)
-        #pygame.time.wait(SPEED)
 
     pygame.quit()
 
