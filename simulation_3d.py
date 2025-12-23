@@ -186,22 +186,28 @@ class Planet:
         return force_x, force_y, force_z
 
     def draw_orbit(self):
-        if len(self.orbit) > 1:
-            #glTranslatef(0, 0,0) #Move to the place
-            #glTranslatef(-self.x*SCALE, -self.y*SCALE, -self.z*SCALE) #Move to the place
-            #print(self.orbit)
-            #print(-self.x*SCALE, -self.y*SCALE, -self.z*SCALE)
+        points = len(self.orbit)
+        if points > 1:
             glBegin(GL_LINES) 
             glColor3f (self.color[0]/255,self.color[1]/255,self.color[2]/255)
             i = 0
+            ii=0                
+            #draw only last 1000/5 points of an orbit
             for point in self.orbit:
-                if i > 1:
-                    glVertex3f(self.orbit[i-1][0]*SCALE,self.orbit[i-1][1]*SCALE,self.orbit[i-1][2]*SCALE)
-                    glVertex3f(self.orbit[i][0]*SCALE,self.orbit[i][1]*SCALE,self.orbit[i][2]*SCALE)
-                    #glVertex3f(x,y,z)
+                if points > 1000:
+                    if ii > 1 and ii < 1000:
+                        j = points - ii
+                        #print(i)
+                        glVertex3f(self.orbit[j-5][0]*SCALE,self.orbit[j-5][1]*SCALE,self.orbit[j-5][2]*SCALE)
+                        glVertex3f(self.orbit[j][0]*SCALE,self.orbit[j][1]*SCALE,self.orbit[j][2]*SCALE)
+                    elif ii > 1000 : 
+                        break
+                else :
+                    if i > 1 :
+                        glVertex3f(self.orbit[i-1][0]*SCALE,self.orbit[i-1][1]*SCALE,self.orbit[i-1][2]*SCALE)
+                        glVertex3f(self.orbit[i][0]*SCALE,self.orbit[i][1]*SCALE,self.orbit[i][2]*SCALE)
                 i += 1
-                if(i == 100) : continue
-
+                ii +=5
             glEnd()
 
 def force_gravite(x,y):

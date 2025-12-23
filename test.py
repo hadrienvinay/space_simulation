@@ -36,7 +36,6 @@ ORANGE_3D = (1,0.5,0,1)
 GREEN_3D = (0,0.92,0,1)
 DARK_GREY_3D = (0.3,0.29,0.3,1)
 RED_3D = (1,0.1,0,1)
-angle_vue = 30
 
 # Fonction pour dessiner un rectangle 2D (bouton)
 def draw_2d_rect(x, y, width, height, color):
@@ -74,7 +73,6 @@ def load_image(filename):
         GL_UNSIGNED_BYTE, # Type des données
         data       # Données de la texture
     )
-
     # Paramètres de filtrage
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
@@ -146,7 +144,7 @@ class Planet:
             glEnable(GL_TEXTURE_2D)
             glBindTexture(GL_TEXTURE_2D, self.texture)
         gluQuadricTexture(sphere, GL_TRUE)  # Active le mappage de texture si l'image est chargée
-        gluQuadricNormals(sphere, GLU_SMOOTH)
+        #gluQuadricNormals(sphere, GLU_SMOOTH)
         gluSphere(sphere,self.radius,32,32) #Draw sphere
         gluDeleteQuadric(sphere)
         if self.texture != 0:
@@ -193,10 +191,6 @@ class Planet:
 
     def draw_orbit(self):
         if len(self.orbit) > 1:
-            #glTranslatef(0, 0,0) #Move to the place
-            #glTranslatef(-self.x*SCALE, -self.y*SCALE, -self.z*SCALE) #Move to the place
-            #print(self.orbit)
-            #print(-self.x*SCALE, -self.y*SCALE, -self.z*SCALE)
             glBegin(GL_LINES) 
             glColor3f (self.color[0]/255,self.color[1]/255,self.color[2]/255)
             i = 0
@@ -218,9 +212,44 @@ class Planet:
                         glVertex3f(self.orbit[i][0]*SCALE,self.orbit[i][1]*SCALE,self.orbit[i][2]*SCALE)
                 i += 1
                 ii +=10
-
             glEnd()
 
+class Button:
+    def __init__(self, rect, text, color,font):
+        self.rect = rect
+        self.text = text
+        self.color = color
+        self.font = font
+        self.data = pygame.image.tostring(text, "RGBA", True)
+        self.x = rect.x
+        self.y = rect.y
+        self.width = rect.width
+        self.height = rect.height
+
+    def update_button(self,text,font):
+        #self.color = color
+        self.text = font.render("%s"%text, False, self.color)
+        self.data = pygame.image.tostring(self.text, "RGBA", True)
+
+class Camera_Position:
+    def __init__(self, pos_x,pos_y,pos_z,angle_x,angle_y,angle_z):
+        self.pos_x = pos_x
+        self.pos_y = pos_y
+        self.pos_z = pos_z
+        self.angle_x = angle_x
+        self.angle_y = angle_y
+        self.angle_z = angle_z
+    
+    def infos(self):
+        print(self.angle_x,self.angle_y,self.angle_z)
+
+    def reset_angles(self):
+        if self.angle_x>720 or self.angle_x<-720:
+            self.angle_x = 0
+        if self.angle_y>720 or self.angle_y<-720:
+            self.angle_y = 0
+        if self.angle_z>720 or self.angle_z<-720:
+            self.angle_z = 0
 
 def force_gravite(x,y):
     distance_x = x - 0
@@ -238,14 +267,12 @@ def init_planet(tab_planets):
 
     texture_earth = load_image("textures/earth_test.jpg")
     earth = Planet(0,0,0,10,BLUE,5.97*10**24,0,0,texture_earth,5)
-    #earth.x_vel = -1 *100
-    earth.y_vel = 29.786 * 10 #vitesse rotation autour soleil : 30km/s
+    earth.y_vel = -29.786 * 10 #vitesse rotation autour soleil : 30km/s
     earth.orbit.append((earth.x, earth.y, earth.z))
     texture_moon = load_image("textures/moon_test.jpg")
     moon  = Planet(earth.x - 0.0026*AU, 0,0.0002*AU,5,DARK_GREY,7.347*10**22,0,0,texture_moon,0)
     moon.y_vel = earth.y_vel
     moon.y_vel += 1.02 * 1000 #v orbitale : 1.02km/s
-
     moon.orbit.append((moon.x, moon.y, moon.z))
 
     #texture_sun = load_image("textures/sun.jpg")
@@ -274,71 +301,35 @@ def draw_grid():
         glVertex3f(500, i*5, -10)
         glVertex3f(i*5, -500, -10)
         glVertex3f(i*5, 500, -10)
-        #for j in range(-20,20):
-            #force_gravite(i*10,j)
-
     glEnd()
 
-def draw_planet(Planet):
-    sphere = gluNewQuadric() #Create new sphere
-    #glPushMatrix()
-    glColor4f(Planet.color[0],Planet.color[1],Planet.color[2],0) #Put color
-    gluSphere(sphere,Planet.radius,32,32) #Draw sphere
-    #Planet.draw()
-
-def draw_text(x,y):
-    glColor3f(1.0, 0.0, 0.0)
-    glRasterPos2f(x, y)
-    text = "QUITTER"
-    for i in (0, len(text)):
-        #glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, text)
-        print("ok")
-
-def handle_keys(angle_vue):
+def handle_keys(camera):
     keypress = pygame.key.get_pressed()
     if keypress[pygame.K_z]:
-        glTranslatef(0,0.5,0)
+        camera.pos_x -= 0.5
     if keypress[pygame.K_s]:
-        glTranslatef(0,-0.5,0)
+        camera.pos_x += 0.5
     if keypress[pygame.K_d]:
-        glTranslatef(0.5,0,0)
+        camera.pos_y += 0.5
     if keypress[pygame.K_q]:
-        glTranslatef(-0.5,0,0)
+        camera.pos_y -= 0.5
     if keypress[pygame.K_a]:
-        glTranslatef(0,0,0.5)
+        camera.pos_z += 0.5
     if keypress[pygame.K_e]:
-        glTranslatef(0,0,-0.5)
+        camera.pos_z -= 0.5
+    if keypress[pygame.K_RIGHT]:
+        camera.angle_x -=0.5
+    if keypress[pygame.K_LEFT]:
+        camera.angle_x +=0.5
+    if keypress[pygame.K_UP]:
+        camera.angle_z +=0.5
+    if keypress[pygame.K_DOWN]:
+        camera.angle_z -=0.5
     if keypress[pygame.K_t]:
-        angle_vue +=2
+        camera.angle_y +=0.5
     if keypress[pygame.K_y]:
-        angle_vue -=2
+        camera.angle_y -=0.5
 
-def draw_light_source():
-    glDisable(GL_LIGHTING)  # Désactive l'éclairage pour dessiner le Soleil
-    glPushMatrix()
-    glColor3f(1.0, 1.0, 0.0)  # Jaune
-    quad = gluNewQuadric()
-    gluSphere(quad, 0.5, 32, 32)  # Soleil de rayon 0.5
-    glPopMatrix()
-    glEnable(GL_LIGHTING)   # Réactive l'éclairage
-
-class Button:
-    def __init__(self, rect, text, color,font):
-        self.rect = rect
-        self.text = text
-        self.color = color
-        self.font = font
-        self.data = pygame.image.tostring(text, "RGBA", True)
-        self.x = rect.x
-        self.y = rect.y
-        self.width = rect.width
-        self.height = rect.height
-
-    def update_button(self,text,font):
-        #self.color = color
-        self.text = font.render("%s"%text, False, self.color)
-        self.data = pygame.image.tostring(self.text, "RGBA", True)
-        
 def reset(tab_planets):
     del tab_planets
     new_tab = []
@@ -355,6 +346,8 @@ def main():
     text_surface = font.render("Système Terre - Lune", False, (255, 215, 255, 1))
     text_width, text_height = text_surface.get_size()
     text_data = pygame.image.tostring(text_surface, "RGBA", True)
+
+    camera = Camera_Position(150,100,50,0,0,0)
     
     button_orbit = Button (pygame.Rect(WIDTH-180, HEIGHT-70, 150, 50),
                            font.render("Orbit ON", False, (0, 0, 0, 0)),
@@ -392,15 +385,14 @@ def main():
 
     glEnable(GL_DEPTH_TEST)
     glMatrixMode(GL_PROJECTION)
-    gluPerspective(40,(display[0]/display[1]), 10,1000)
+    gluPerspective(60,(display[0]/display[1]), 20,1000)
+
     # --- Activation de l'éclairage ---
     #glEnable(GL_LIGHTING)
     #glEnable(GL_LIGHT0)  # Une seule source : le Soleil
-
     # --- Paramètres de la lumière (Soleil) ---
     glLightfv(GL_LIGHT0, GL_POSITION, [-1000, 50.0, 0.0, 1.0])  # Position de la lumière : ici un soleil au loin à gauche
     glLightfv(GL_LIGHT0, GL_DIFFUSE, [255,255,200, 1])   # Lumière diffuse (jaune clair)
-
 
     glMatrixMode(GL_MODELVIEW)
     glEnable(GL_TEXTURE_2D)
@@ -409,11 +401,10 @@ def main():
     viewMatrix = glGetFloatv(GL_MODELVIEW_MATRIX)
     glLoadIdentity()
 
-    #Default Variables, Orbit ON
+    #Default Variables, Orbit ON, SPEED, pov, time, planets
     ORBIT_ON = 1
     SPEED = 60
     move = 0
-    angle_vue = 30
     run = True
     tab_planets = []
     init_planet(tab_planets)
@@ -428,12 +419,6 @@ def main():
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE or event.key == pygame.K_RETURN:
                     run = False  
-                if event.type == pygame.MOUSEWHEEL:
-                    print("down")
-                    glTranslatef(0,0,0.5)
-                if event.type == pygame.MOUSEBUTTONUP:
-                    print("UP")
-                    glTranslatef(0,0,-0.5)
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:  # Clic gauche
                     mouse_x, mouse_y = pygame.mouse.get_pos()
@@ -454,15 +439,11 @@ def main():
                     button_reset.y <= mouse_y <= button_reset.y + button_reset.height):
                         tab_planets = reset(tab_planets)
                         move = 0
-                        camera_x = 0
-                        camera_y = 0
                         incremented_speed = 1
-                        #glLoadIdentity()
-                        #glPushMatrix()
-                        #gluLookAt(10, -50,20, 0, 0, 0, 0, 0, 1)
+                        del camera
+                        camera = Camera_Position(150,100,50,0,0,0)
                     if (button_plus.x <= mouse_x <= button_plus.x + button_plus.width and
                     button_plus.y <= mouse_y <= button_plus.y + button_plus.height):
-                            print("PLUS")
                             if (SPEED<500):
                                 SPEED *= 2
                                 button_speed.update_button("x %.2f"%(SPEED/60),font)
@@ -478,8 +459,6 @@ def main():
                     button_earth_speed.y <= mouse_y <= button_earth_speed.y + button_earth_speed.height):
                             tab_planets = reset(tab_planets)
                             move = 0
-                            camera_x = 0
-                            camera_y = 0
                             tab_planets[0].y_vel = incremented_speed * 10
                             incremented_speed=0
                             tab_planets[1].y_vel = tab_planets[0].y_vel + 1.02 * 1000
@@ -491,17 +470,18 @@ def main():
         # init model view matrix and center it to the earth (center object)
         camera_x = tab_planets[0].x  * SCALE
         camera_y = tab_planets[0].y  * SCALE
-        camera_z = tab_planets[0].z  * SCALE
+        camera_z = tab_planets[0].z  * SCALE        
+        handle_keys(camera)
+        camera.reset_angles()
+        camera.infos()
+        
         glLoadIdentity()  
-        gluLookAt(camera_x+100, camera_y+150,camera_z+50, -30, 0, 0, 0, 0, 1)
-        draw_light_source()
+        gluLookAt(camera_x+camera.pos_x, camera_y+camera.pos_y,camera_z+camera.pos_z, camera_x+camera.angle_x, camera_y+camera.angle_y,camera_z+camera.angle_z, 0, 0, 1)
+
         # init the view matrix
         glPushMatrix()
         glLoadIdentity()
-        
-        # apply the movement of the camera with keyboard input
-        handle_keys(angle_vue)
-        
+                
         # multiply the current matrix by the get the new view matrix and store the final vie matrix 
         glMultMatrixf(viewMatrix)
         viewMatrix = glGetFloatv(GL_MODELVIEW_MATRIX)
@@ -509,24 +489,21 @@ def main():
         # apply view matrix
         glPopMatrix()
         glMultMatrixf(viewMatrix)
-
         glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT) #Clear the screen
-
         glPushMatrix()
+
         #draw images, axys and grid
         draw_image(texture)
         draw_axys()
-        draw_grid()  
+        draw_grid()     
+
         glEnable(GL_LIGHTING)
         glEnable(GL_LIGHT0)
-        timer = time.time()
+
         for planet in tab_planets:  
-            if(planet.sun == 0):
-                planet.update_position(tab_planets)
-            #glTranslatef(-planet.x*SCALE, -planet.y*SCALE, -planet.z*SCALE) #Move to the place
+            planet.update_position(tab_planets)
             planet.draw()
 
-            #glTranslatef(-planet.x*SCALE, -planet.y*SCALE, -planet.z*SCALE)
             if(ORBIT_ON):
             #if  planet.sun == 0:
                 glDisable(GL_LIGHTING)
@@ -540,9 +517,6 @@ def main():
 
         glPopMatrix()
 
-        timer_end = time.time()
-        print(timer_end - timer)
-
         # 3. Afficher le texte en 2D par-dessus la scène OpenGL
         # On sauvegarde la matrice de projection OpenGL
         glMatrixMode(GL_PROJECTION)
@@ -554,7 +528,6 @@ def main():
         glLoadIdentity()
         glDisable(GL_DEPTH_TEST)
         glRasterPos2f(0, 0)  # Important pour glDrawPixels
-
         # Afficher le texte
         glRasterPos2f(50, display[1] - 50)
         glDrawPixels(text_width, text_height, GL_RGBA, GL_UNSIGNED_BYTE, text_data)
@@ -574,9 +547,7 @@ def main():
             glRasterPos2f(button.x + (button.width - button.text.get_width()) // 2,button.y + (button.height - button.text.get_height()) // 2)
             glDrawPixels(button.text.get_width(), button.text.get_height(), GL_RGBA, GL_UNSIGNED_BYTE, button.data)
         
-
         glEnable(GL_DEPTH_TEST)
-
         # On restaure les matrices
         glMatrixMode(GL_PROJECTION)
         glPopMatrix()
