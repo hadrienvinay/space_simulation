@@ -17,7 +17,7 @@ WIDTH, HEIGHT = 1400, 1000
 AU = 149.6e6 * 1000
 G = 6.67428e-11
 SCALE_1 = 15000 / AU # 1AU = 500 pixel
-SCALE_2 = 150 / AU # 1AU = 500 pixel
+SCALE_2 = 15 / AU # 1AU = 500 pixel
 TIMESTEP_1 = 3600  # 1 day = *24 , here 1hour
 TIMESTEP_2 = 3600 * 24 # 1 day = *24 , here 1 day
 
@@ -349,8 +349,8 @@ def init_planet(tab_planets):
     tab_planets.append(mars)
     tab_planets.append(jupiter)
     tab_planets.append(saturn)
-    #tab_planets.append(uranus)
-    #tab_planets.append(neptune)
+    tab_planets.append(uranus)
+    tab_planets.append(neptune)
 
 def handle_keys(camera):
     keypress = pygame.key.get_pressed()

@@ -269,7 +269,8 @@ def init_planet(tab_planets):
     sun = Planet(0,0,0,8, WHITE, 1.98892 * 10**30,0,1,texture_sun,1)
     #sun2 = Planet(5*AU,0.5*AU,0,8, WHITE, 1.98892 * 10**30,0,1)
     #sun2.y_vel = -10 * 1000
-    #sun.z_vel = 1 * 1000
+    sun.x_vel = 10 * 1000
+    sun.z_vel = 10 *1000
 
     tab_planets.append(sun)
     #tab_planets.append(sun2)

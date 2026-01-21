@@ -2,6 +2,14 @@
 Playing with gravity and big masses
 python program
 
+# setup local env for this app
+Setup env
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+
+
+OR :
 python -m pip install pygame numpy pillow PyOpenGL
 # 2D Simulation
 python main.py 
