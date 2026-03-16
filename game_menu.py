@@ -12,7 +12,10 @@ import sys
 import time
 import json
 import random
+from collections import deque
 import numpy as np
+
+MAX_ORBIT_POINTS = 2000
 
 WIDTH, HEIGHT = 1100, 800 
 
@@ -22,6 +25,16 @@ SCALE_1 = 15000 / AU # 1AU = 500 pixel
 SCALE_2 = 150 / AU # 1AU = 500 pixel
 TIMESTEP_1 = 3600  # 1 day = *24 , here 1hour
 TIMESTEP_2 = 3600 * 24 # 1 day = *24 , here 1 day
+
+# Earth 3D mode constants
+SCALE_EARTH = 10.0 / 6.371e6          # Earth radius = 10 visual units
+TIMESTEP_EARTH = 10                    # 10 sec/frame -> 600x real-time at 60fps
+EARTH_RADIUS_M = 6.371e6              # meters
+EARTH_MASS = 5.972e24                  # kg
+EARTH_ROT_PER_FRAME = 360.0 * TIMESTEP_EARTH / 86400.0  # ~0.04167 deg/frame
+V_CIRC_SURFACE = 7910.0               # m/s circular orbit at surface
+LAUNCH_V_FACTOR = 1.15                # elliptical orbit factor
+V_TLI = 10900.0                       # m/s trans-lunar injection velocity
 
 WHITE = (255,255,255)
 YELLOW = (255,255,0)
@@ -145,7 +158,7 @@ class Planet:
         self.texture_name = ""
         self.angle = 0
 
-        self.orbit = []
+        self.orbit = deque(maxlen=MAX_ORBIT_POINTS)
 
         self.x_vel = 0
         self.y_vel = 0
@@ -154,25 +167,31 @@ class Planet:
     def infos(self):
         print(self.x,self.y,self.z)
 
+    _shared_quadric = None
+
+    @classmethod
+    def _get_quadric(cls):
+        if cls._shared_quadric is None:
+            cls._shared_quadric = gluNewQuadric()
+        return cls._shared_quadric
+
     def draw(self,SCALE):
-        x = self.x * SCALE 
-        y = self.y * SCALE 
-        z = self.z * SCALE 
+        x = self.x * SCALE
+        y = self.y * SCALE
+        z = self.z * SCALE
+        sphere = self._get_quadric()
         glPushMatrix()
-        sphere = gluNewQuadric() #Create new sphere
-        glTranslatef(x, y, z) #Move to the placegluSphere(sphere,self.radius,32,32) #Draw sphere
-        glRotatef(self.angle,0,0,1)
+        glTranslatef(x, y, z)
+        glRotatef(self.angle, 0, 0, 1)
         self.angle += self.rotation
         if self.texture == 0:
-            glColor4f(self.color[0]/255,self.color[1]/255,self.color[2]/255,0) #Put default color
-        else :
-            glColor4f(1,1,1,0) #Put default color
+            glColor4f(self.color[0]/255, self.color[1]/255, self.color[2]/255, 0)
+        else:
+            glColor4f(1, 1, 1, 0)
             glEnable(GL_TEXTURE_2D)
             glBindTexture(GL_TEXTURE_2D, self.texture)
-        gluQuadricTexture(sphere, GL_TRUE)  # Active le mappage de texture si l'image est chargée
-        #gluQuadricNormals(sphere, GLU_SMOOTH)
-        gluSphere(sphere,self.radius,32,32) #Draw sphere
-        gluDeleteQuadric(sphere)
+        gluQuadricTexture(sphere, GL_TRUE)
+        gluSphere(sphere, self.radius, 32, 32)
         if self.texture != 0:
             glDisable(GL_TEXTURE_2D)
         glPopMatrix()
@@ -181,6 +200,9 @@ class Planet:
         total_fx = total_fy = total_fz = 0
         for planet in planets:
             if self == planet:
+                continue
+            # Skip negligible satellite-satellite gravity
+            if self.mass < 1e10 and planet.mass < 1e10:
                 continue
             fx, fy, fz = self.attraction(planet)
             total_fx += fx
@@ -203,34 +225,22 @@ class Planet:
         distance_z = other_z - self.z
         distance2 = math.sqrt(distance_x ** 2 + distance_y ** 2 + distance_z **2)
         force2 =  G * self.mass * other.mass / distance2 ** 2
-        theta = math.atan2(distance_y, distance_x)
-        beta = math.atan2(distance_z, distance_y)
-        force_x = math.cos(theta) * force2
-        force_y = math.sin(theta) * force2
-        force_z = math.sin(beta) * force2
-
-        #force_x = -G * self.mass * distance_x / distance2**3        
-        #force_y = -G * self.mass * distance_y / distance2**3
-        #force_z = -G * self.mass * distance_z / distance2**3
-        #print(force_x,force_y,force_z)
+        # Correct 3D vector decomposition (replaces atan2-based 2D approximation)
+        force_x = force2 * distance_x / distance2
+        force_y = force2 * distance_y / distance2
+        force_z = force2 * distance_z / distance2
         return force_x, force_y, force_z
 
     def draw_orbit(self, SCALE):
         points = len(self.orbit)
         if points < 2:
             return
-        glBegin(GL_LINES)
+        MAX_SEGMENTS = 200
+        step = max(1, points // MAX_SEGMENTS)
+        glBegin(GL_LINE_STRIP)
         glColor3f(self.color[0]/255, self.color[1]/255, self.color[2]/255)
-        if points > 1000:
-            # Draw last ~1000 points with step of 10
-            for ii in range(10, 1000, 10):
-                j = points - ii
-                glVertex3f(self.orbit[j-10][0]*SCALE, self.orbit[j-10][1]*SCALE, self.orbit[j-10][2]*SCALE)
-                glVertex3f(self.orbit[j][0]*SCALE, self.orbit[j][1]*SCALE, self.orbit[j][2]*SCALE)
-        else:
-            for i in range(1, points):
-                glVertex3f(self.orbit[i-1][0]*SCALE, self.orbit[i-1][1]*SCALE, self.orbit[i-1][2]*SCALE)
-                glVertex3f(self.orbit[i][0]*SCALE, self.orbit[i][1]*SCALE, self.orbit[i][2]*SCALE)
+        for i in range(0, points, step):
+            glVertex3f(self.orbit[i][0]*SCALE, self.orbit[i][1]*SCALE, self.orbit[i][2]*SCALE)
         glEnd()
 
 class Button:
@@ -249,6 +259,10 @@ class Button:
     def update_button(self, text, font):
         self.text = font.render("%s" % text, False, self.text_color)
         self.data = pygame.image.tobytes(self.text, "RGBA", True)
+
+    def hit_test(self, mx, my):
+        return (self.x <= mx <= self.x + self.width and
+                self.y <= my <= self.y + self.height)
 
 class Camera_Position:
     def __init__(self, pos_x,pos_y,pos_z,angle_x,angle_y,angle_z):
@@ -270,17 +284,12 @@ class Camera_Position:
         if self.angle_z>720 or self.angle_z<-720:
             self.angle_z = 0
 
-def force_gravite(x,y):
-    distance_x = x - 0
-    distance_y = y - 0
-    #distance_z = z - sun.z
-    if(distance_x & distance_y != 0):
-        distance = math.sqrt(distance_x ** 2 + distance_y ** 2)
-    else : distance = 1
-    force =  G * 1.98892 * 10**30 / distance ** 2
-    #print(force*SCALE)
-    coef = force *SCALE_1*SCALE_1
-    return coef
+def draw_text_overlay(font, text, color, x, y):
+    """Render text as a 2D overlay using glDrawPixels."""
+    surf = font.render(text, False, color)
+    data = pygame.image.tobytes(surf, "RGBA", True)
+    glRasterPos2f(x, y)
+    glDrawPixels(surf.get_width(), surf.get_height(), GL_RGBA, GL_UNSIGNED_BYTE, data)
 
 def draw_axys():
     glBegin(GL_LINES)
@@ -352,18 +361,11 @@ def draw_gravity_grid(tab_planets, SCALE, grid_range=200, grid_steps=22, z_scale
     
 def screen_to_world_z0(mouse_x, mouse_y, modelview, projection, viewport):
     """Convert screen coordinates to world coordinates on the z=0 plane."""
-    near = gluUnProject(mouse_x, mouse_y, 0.0, modelview, projection, viewport)
-    far = gluUnProject(mouse_x, mouse_y, 1.0, modelview, projection, viewport)
-    # Ray direction
-    dx = far[0] - near[0]
-    dy = far[1] - near[1]
-    dz = far[2] - near[2]
-    if abs(dz) < 1e-10:
+    near, d = screen_to_ray(mouse_x, mouse_y, modelview, projection, viewport)
+    if abs(d[2]) < 1e-10:
         return near[0], near[1]
-    t = -near[2] / dz
-    world_x = near[0] + t * dx
-    world_y = near[1] + t * dy
-    return world_x, world_y
+    t = -near[2] / d[2]
+    return near[0] + t * d[0], near[1] + t * d[1]
 
 def compute_orbital_velocity(planet_x, planet_y, click_wx, click_wy, tab_planets, SCALE):
     """Compute orbital velocity for a planet based on nearest sun and click direction."""
@@ -430,6 +432,103 @@ def load_sandbox(filename="sandbox_save.json"):
         p.orbit.append((p.x, p.y, p.z))
         tab_planets.append(p)
     return tab_planets
+
+def screen_to_ray(mouse_x, mouse_y, modelview, projection, viewport):
+    """Returns (origin, direction) ray in world space from a screen click."""
+    near = gluUnProject(mouse_x, mouse_y, 0.0, modelview, projection, viewport)
+    far  = gluUnProject(mouse_x, mouse_y, 1.0, modelview, projection, viewport)
+    d = (far[0] - near[0], far[1] - near[1], far[2] - near[2])
+    return near, d
+
+def ray_sphere_intersect(ray_origin, ray_dir, center, radius):
+    """Returns intersection point (x,y,z) or None."""
+    ox = ray_origin[0] - center[0]
+    oy = ray_origin[1] - center[1]
+    oz = ray_origin[2] - center[2]
+    a = ray_dir[0]**2 + ray_dir[1]**2 + ray_dir[2]**2
+    b = 2 * (ox * ray_dir[0] + oy * ray_dir[1] + oz * ray_dir[2])
+    c = ox**2 + oy**2 + oz**2 - radius**2
+    disc = b*b - 4*a*c
+    if disc < 0:
+        return None
+    sq = math.sqrt(disc)
+    t1 = (-b - sq) / (2*a)
+    t2 = (-b + sq) / (2*a)
+    t = t1 if t1 > 0 else t2
+    if t < 0:
+        return None
+    return (ray_origin[0] + t*ray_dir[0],
+            ray_origin[1] + t*ray_dir[1],
+            ray_origin[2] + t*ray_dir[2])
+
+def launch_satellite(hit_visual, SCALE):
+    """Create a satellite at the hit point on Earth's surface with tangent velocity."""
+    # Convert visual coords to real-world meters
+    pos_x = hit_visual[0] / SCALE
+    pos_y = hit_visual[1] / SCALE
+    pos_z = hit_visual[2] / SCALE
+    # Normal (radial direction from Earth center)
+    r = math.sqrt(pos_x**2 + pos_y**2 + pos_z**2)
+    if r < 1e-6:
+        r = 1.0
+    nx, ny, nz = pos_x/r, pos_y/r, pos_z/r
+    # Tangent direction: cross((0,0,1), normal) → eastward
+    tx = -ny
+    ty = nx
+    tz = 0.0
+    tlen = math.sqrt(tx**2 + ty**2 + tz**2)
+    if tlen < 1e-6:
+        # Near pole: use cross((1,0,0), normal)
+        tx, ty, tz = 0.0, nz, -ny
+        tlen = math.sqrt(tx**2 + ty**2 + tz**2)
+    tx /= tlen; ty /= tlen; tz /= tlen
+    v = LAUNCH_V_FACTOR * V_CIRC_SURFACE
+    color = (random.randint(100, 255), random.randint(100, 255), random.randint(100, 255))
+    sat = Planet(pos_x, pos_y, pos_z, 0.3, color, 1000, 0, 0, 0, 0)
+    sat.x_vel = tx * v
+    sat.y_vel = ty * v
+    sat.z_vel = tz * v
+    sat.orbit.append((sat.x, sat.y, sat.z))
+    return sat
+
+def init_earth_3d(tab_planets):
+    """Initialize Earth + Moon for 3D satellite mode."""
+    texture_earth = load_image("textures/earth_test.jpg")
+    earth = Planet(0, 0, 0, 10, BLUE, EARTH_MASS, 0, 0, texture_earth, EARTH_ROT_PER_FRAME)
+    earth.orbit.append((earth.x, earth.y, earth.z))
+    tab_planets.append(earth)
+    texture_moon = load_image("textures/moon_test.jpg")
+    moon = Planet(-3.844e8, 0, 0, 2.7, DARK_GREY, 7.347e22, 0, 0, texture_moon, 0)
+    moon.y_vel = 1.022 * 1000  # orbital velocity ~1.022 km/s
+    moon.orbit.append((moon.x, moon.y, moon.z))
+    tab_planets.append(moon)
+
+def launch_rocket_to_moon(tab_planets, SCALE):
+    """Launch a rocket from Earth surface towards the Moon."""
+    earth = tab_planets[0]
+    moon = None
+    for p in tab_planets:
+        if 1e21 < p.mass < 1e24:
+            moon = p
+            break
+    if moon is None:
+        return None
+    dx = moon.x - earth.x
+    dy = moon.y - earth.y
+    dz = moon.z - earth.z
+    dist = math.sqrt(dx**2 + dy**2 + dz**2)
+    nx, ny, nz = dx/dist, dy/dist, dz/dist
+    # Launch from Earth surface facing the Moon
+    launch_x = earth.x + EARTH_RADIUS_M * nx
+    launch_y = earth.y + EARTH_RADIUS_M * ny
+    launch_z = earth.z + EARTH_RADIUS_M * nz
+    v = V_TLI
+    rocket = Planet(launch_x, launch_y, launch_z, 0.5, (255, 50, 50), 1000, 0, 0, 0, 0)
+    rocket.x_vel = v * nx
+    rocket.y_vel = v * ny
+    rocket.z_vel = v * nz
+    rocket.orbit.append((rocket.x, rocket.y, rocket.z))
+    return rocket
 
 def init_earth_moon(tab_planets):
     texture_earth = load_image("textures/earth_test.jpg")
@@ -532,7 +631,6 @@ def handle_keys(camera):
         camera.angle_y -=0.5
 
 def reset(tab_planets,menu):
-    del tab_planets
     new_tab = []
     if menu == 1 :
         init_earth_moon(new_tab)
@@ -540,6 +638,8 @@ def reset(tab_planets,menu):
         init_planet(new_tab)
     elif menu == 3:
         pass  # Sandbox starts empty
+    elif menu == 4:
+        init_earth_3d(new_tab)
     return new_tab
 
 def init_game(display):
@@ -571,28 +671,32 @@ def main():
     sub_data = pygame.image.tobytes(sub_surface, "RGBA", True)
 
     BTN_W, BTN_H, GAP = 340, 62, 16
-    _total_btn_h = 4 * BTN_H + 3 * GAP          # 248 + 48 = 296
+    _total_btn_h = 5 * BTN_H + 4 * GAP          # 310 + 64 = 374
     menu_start_x = WIDTH // 2 - BTN_W // 2      # centered
     menu_start_y = HEIGHT // 2 - _total_btn_h // 2 - 40  # shifted down to leave room for title
 
     COL_BLUE   = (0.20, 0.45, 0.85, 1)
     COL_GOLD   = (0.85, 0.55, 0.05, 1)
     COL_PURPLE = (0.55, 0.20, 0.75, 1)
+    COL_TEAL   = (0.10, 0.60, 0.60, 1)
     COL_RED    = (0.72, 0.10, 0.10, 1)
 
-    button_earth = Button(pygame.Rect(menu_start_x, menu_start_y + 3*(BTN_H + GAP), BTN_W, BTN_H),
+    button_earth = Button(pygame.Rect(menu_start_x, menu_start_y + 4*(BTN_H + GAP), BTN_W, BTN_H),
                         font_menu.render("TERRE - LUNE", False, (255, 255, 255)),
                         COL_BLUE, font_menu, text_color=(255, 255, 255))
-    button_solar_system = Button(pygame.Rect(menu_start_x, menu_start_y + 2*(BTN_H + GAP), BTN_W, BTN_H),
+    button_solar_system = Button(pygame.Rect(menu_start_x, menu_start_y + 3*(BTN_H + GAP), BTN_W, BTN_H),
                         font_menu.render("SYSTEME SOLAIRE", False, (255, 255, 255)),
                         COL_GOLD, font_menu, text_color=(255, 255, 255))
-    button_sandbox = Button(pygame.Rect(menu_start_x, menu_start_y + 1*(BTN_H + GAP), BTN_W, BTN_H),
+    button_sandbox = Button(pygame.Rect(menu_start_x, menu_start_y + 2*(BTN_H + GAP), BTN_W, BTN_H),
                         font_menu.render("SANDBOX", False, (255, 255, 255)),
                         COL_PURPLE, font_menu, text_color=(255, 255, 255))
+    button_earth_3d = Button(pygame.Rect(menu_start_x, menu_start_y + 1*(BTN_H + GAP), BTN_W, BTN_H),
+                        font_menu.render("TERRE 3D", False, (255, 255, 255)),
+                        COL_TEAL, font_menu, text_color=(255, 255, 255))
     button_quit_menu = Button(pygame.Rect(menu_start_x, menu_start_y, BTN_W, BTN_H),
                         font_menu.render("QUITTER", False, (255, 255, 255)),
                         COL_RED, font_menu, text_color=(255, 255, 255))
-    buttons_menu = [button_earth, button_solar_system, button_sandbox, button_quit_menu]
+    buttons_menu = [button_earth, button_solar_system, button_sandbox, button_earth_3d, button_quit_menu]
 
     texture_menu_bg = 0  # loaded lazily (reloaded after context recreation)
 
@@ -614,17 +718,15 @@ def main():
                         # Conversion des coordonnées OpenGL (viewport)
                         viewport = glGetIntegerv(GL_VIEWPORT)
                         mouse_y = viewport[3] - mouse_y  # Inversion Y
-                        if (button_earth.x <= mouse_x <= button_earth.x + button_earth.width and
-                            button_earth.y <= mouse_y <= button_earth.y + button_earth.height):
+                        if button_earth.hit_test(mouse_x, mouse_y):
                             menu = 1
-                        if (button_solar_system.x <= mouse_x <= button_solar_system.x + button_solar_system.width and
-                                button_solar_system.y <= mouse_y <= button_solar_system.y + button_solar_system.height):
+                        elif button_solar_system.hit_test(mouse_x, mouse_y):
                             menu = 2
-                        if (button_sandbox.x <= mouse_x <= button_sandbox.x + button_sandbox.width and
-                                button_sandbox.y <= mouse_y <= button_sandbox.y + button_sandbox.height):
+                        elif button_sandbox.hit_test(mouse_x, mouse_y):
                             menu = 3
-                        if (button_quit_menu.x <= mouse_x <= button_quit_menu.x + button_quit_menu.width and
-                                button_quit_menu.y <= mouse_y <= button_quit_menu.y + button_quit_menu.height):
+                        elif button_earth_3d.hit_test(mouse_x, mouse_y):
+                            menu = 4
+                        elif button_quit_menu.hit_test(mouse_x, mouse_y):
                             running_menu = 0
    
             # Load background texture (lazy, re-loaded after context recreation)
@@ -729,13 +831,20 @@ def main():
                 text_surface = font.render("Sandbox Mode", False, (255, 215, 255, 1))
                 SCALE = SCALE_2
                 TIMESTEP = TIMESTEP_2
+            elif menu == 4:
+                text_surface = font.render("Terre 3D - Lanceur de Satellites", False, (255, 215, 255, 1))
+                SCALE = SCALE_EARTH
+                TIMESTEP = TIMESTEP_EARTH
             else:
                 text_surface = font.render("Erreur Menu", False, (255, 215, 255, 1))
 
             text_width, text_height = text_surface.get_size()
             text_data = pygame.image.tobytes(text_surface, "RGBA", True)
 
-            camera = Camera_Position(150,100,50,0,0,0)
+            if menu == 4:
+                camera = Camera_Position(0, -35, 15, 0, 0, 0)
+            else:
+                camera = Camera_Position(150,100,50,0,0,0)
             
             SIM_RED   = (0.80, 0.15, 0.15, 1)
             SIM_GREEN = (0.15, 0.68, 0.25, 1)
@@ -813,13 +922,54 @@ def main():
                 buttons_list = [button_add_sun, button_add_planet, button_play_pause,
                                 button_save, button_load, button_sb_reset, button_sb_menu, button_sb_quit]
 
+            if menu == 4:
+                SIM_TEAL_E = (0.10, 0.55, 0.55, 1)
+                SIM_ORANGE_E = (0.85, 0.50, 0.10, 1)
+                button_launch = Button(pygame.Rect(WIDTH-180, HEIGHT-70, 150, 50),
+                                    font.render("Lancer Sat.", False, (255, 255, 255)),
+                                    SIM_TEAL_E, font, text_color=(255, 255, 255))
+                button_e3d_orbit = Button(pygame.Rect(WIDTH-180, HEIGHT-140, 150, 50),
+                                    font.render("Orbits ON", False, (255, 255, 255)),
+                                    SIM_RED, font, text_color=(255, 255, 255))
+                button_e3d_speed = Button(pygame.Rect(WIDTH-180, HEIGHT-210, 150, 50),
+                                    font.render("Speed", False, (255, 255, 255)),
+                                    SIM_NAVY, font, text_color=(255, 255, 255))
+                button_e3d_plus = Button(pygame.Rect(WIDTH-176, HEIGHT-202, 30, 30),
+                                    font.render("+", False, (255, 255, 255)),
+                                    SIM_LGRAY, font, text_color=(255, 255, 255))
+                button_e3d_minus = Button(pygame.Rect(WIDTH-65, HEIGHT-202, 30, 30),
+                                    font.render("-", False, (255, 255, 255)),
+                                    SIM_LGRAY, font, text_color=(255, 255, 255))
+                SIM_ROCKET = (0.75, 0.20, 0.20, 1)
+                button_rocket = Button(pygame.Rect(WIDTH-180, HEIGHT-280, 150, 50),
+                                    font.render("Fusee Lune", False, (255, 255, 255)),
+                                    SIM_ROCKET, font, text_color=(255, 255, 255))
+                button_e3d_reset = Button(pygame.Rect(WIDTH-180, HEIGHT-350, 150, 50),
+                                    font.render("Reset", False, (255, 255, 255)),
+                                    SIM_GREEN, font, text_color=(255, 255, 255))
+                button_e3d_menu = Button(pygame.Rect(WIDTH-180, 20, 150, 50),
+                                    font.render("Menu", False, (255, 255, 255)),
+                                    SIM_GRAY, font, text_color=(255, 255, 255))
+                button_e3d_quit = Button(pygame.Rect(WIDTH-180, 80, 150, 50),
+                                    font.render("QUIT", False, (255, 255, 255)),
+                                    SIM_RED, font, text_color=(255, 255, 255))
+                buttons_list = [button_launch, button_rocket, button_e3d_orbit, button_e3d_speed,
+                                button_e3d_plus, button_e3d_minus,
+                                button_e3d_reset, button_e3d_menu, button_e3d_quit]
+                e3d_launch_mode = False
+                e3d_orbit_on = True
+                satellites = []
+
             glEnable(GL_DEPTH_TEST)
             glMatrixMode(GL_PROJECTION)
-            gluPerspective(60,(display[0]/display[1]), 20,1000)
-            if menu == 1 :
-                # --- Paramètres de la lumière (Soleil) ---
+            if menu == 4:
+                gluPerspective(60, (display[0]/display[1]), 0.1, 2000)
+            else:
+                gluPerspective(60, (display[0]/display[1]), 20, 1000)
+            if menu == 1:
                 glLightfv(GL_LIGHT0, GL_POSITION, [-1000, 50.0, 0.0, 1.0])
-                glLightfv(GL_LIGHT0, GL_DIFFUSE, [255,255,200, 1])
+                glLightfv(GL_LIGHT0, GL_DIFFUSE, [255, 255, 200, 1])
+            # menu == 4: no lighting setup needed
 
             glMatrixMode(GL_MODELVIEW)
             glEnable(GL_TEXTURE_2D)
@@ -830,6 +980,8 @@ def main():
                 init_earth_moon(tab_planets)
             if (menu == 2):
                 init_planet(tab_planets)
+            if (menu == 4):
+                init_earth_3d(tab_planets)
             # menu == 3: start with empty tab_planets
 
             texture = load_image('textures/milky.jpg')
@@ -852,37 +1004,34 @@ def main():
 
                             if menu == 3:
                                 # --- Sandbox button clicks ---
-                                def btn_hit(b):
-                                    return (b.x <= mouse_x <= b.x + b.width and
-                                            b.y <= mouse_y <= b.y + b.height)
-                                if btn_hit(button_add_sun):
+                                if button_add_sun.hit_test(mouse_x, mouse_y):
                                     sandbox_mode = SANDBOX_PLACING_SUN
                                     sandbox_pending_planet = None
                                     sandbox_pending_pos = None
-                                elif btn_hit(button_add_planet):
+                                elif button_add_planet.hit_test(mouse_x, mouse_y):
                                     sandbox_mode = SANDBOX_PLACING_PLANET_POS
                                     sandbox_pending_planet = None
                                     sandbox_pending_pos = None
-                                elif btn_hit(button_play_pause):
+                                elif button_play_pause.hit_test(mouse_x, mouse_y):
                                     sandbox_paused = not sandbox_paused
                                     button_play_pause.update_button("Play" if sandbox_paused else "Pause", font)
                                     button_play_pause.color = SIM_GREEN if sandbox_paused else SIM_ORANGE
-                                elif btn_hit(button_save):
+                                elif button_save.hit_test(mouse_x, mouse_y):
                                     save_sandbox(tab_planets)
-                                elif btn_hit(button_load):
+                                elif button_load.hit_test(mouse_x, mouse_y):
                                     tab_planets = load_sandbox()
                                     move = 0
-                                elif btn_hit(button_sb_reset):
+                                elif button_sb_reset.hit_test(mouse_x, mouse_y):
                                     tab_planets = []
                                     sandbox_mode = SANDBOX_IDLE
                                     sandbox_pending_planet = None
                                     sandbox_pending_pos = None
                                     move = 0
-                                elif btn_hit(button_sb_menu):
+                                elif button_sb_menu.hit_test(mouse_x, mouse_y):
                                     tab_planets = []
                                     menu = 0
                                     run = 0
-                                elif btn_hit(button_sb_quit):
+                                elif button_sb_quit.hit_test(mouse_x, mouse_y):
                                     run = False
                                     running_menu = False
                                 elif mouse_x < WIDTH - 190 and last_modelview is not None:
@@ -926,10 +1075,55 @@ def main():
                                             sandbox_pending_pos = None
                                             sandbox_mode = SANDBOX_IDLE
 
+                            elif menu == 4:
+                                # --- Earth 3D button clicks ---
+                                if button_launch.hit_test(mouse_x, mouse_y):
+                                    e3d_launch_mode = not e3d_launch_mode
+                                    button_launch.update_button("Annuler" if e3d_launch_mode else "Lancer Sat.", font)
+                                    button_launch.color = SIM_ORANGE_E if e3d_launch_mode else SIM_TEAL_E
+                                elif button_rocket.hit_test(mouse_x, mouse_y):
+                                    rocket = launch_rocket_to_moon(tab_planets, SCALE)
+                                    if rocket is not None:
+                                        tab_planets.append(rocket)
+                                        satellites.append(rocket)
+                                elif button_e3d_orbit.hit_test(mouse_x, mouse_y):
+                                    e3d_orbit_on = not e3d_orbit_on
+                                    button_e3d_orbit.update_button("Orbits ON" if e3d_orbit_on else "Orbits OFF", font)
+                                    button_e3d_orbit.color = SIM_RED if e3d_orbit_on else SIM_GRAY
+                                elif button_e3d_plus.hit_test(mouse_x, mouse_y):
+                                    if SPEED < 500:
+                                        SPEED *= 2
+                                        button_e3d_speed.update_button("x %.2f" % (SPEED/60), font)
+                                elif button_e3d_minus.hit_test(mouse_x, mouse_y):
+                                    if SPEED > 9:
+                                        SPEED /= 2
+                                        button_e3d_speed.update_button("x %.2f" % (SPEED/60), font)
+                                elif button_e3d_reset.hit_test(mouse_x, mouse_y):
+                                    tab_planets = reset(tab_planets, menu)
+                                    satellites = []
+                                    move = 0
+                                elif button_e3d_menu.hit_test(mouse_x, mouse_y):
+                                    tab_planets = []
+                                    menu = 0
+                                    run = 0
+                                elif button_e3d_quit.hit_test(mouse_x, mouse_y):
+                                    run = False
+                                    running_menu = False
+                                elif e3d_launch_mode and mouse_x < WIDTH - 190 and last_modelview is not None:
+                                    ray_o, ray_d = screen_to_ray(mouse_x, mouse_y,
+                                                                  last_modelview, last_projection, last_viewport)
+                                    hit = ray_sphere_intersect(ray_o, ray_d, (0, 0, 0), 10)
+                                    if hit is not None:
+                                        sat = launch_satellite(hit, SCALE)
+                                        tab_planets.append(sat)
+                                        satellites.append(sat)
+                                        e3d_launch_mode = False
+                                        button_launch.update_button("Lancer Sat.", font)
+                                        button_launch.color = SIM_TEAL_E
+
                             else:
                                 # --- Menu 1/2 button clicks ---
-                                if (button_orbit.x <= mouse_x <= button_orbit.x + button_orbit.width and
-                                    button_orbit.y <= mouse_y <= button_orbit.y + button_orbit.height):
+                                if button_orbit.hit_test(mouse_x, mouse_y):
                                     if ORBIT_ON:
                                         button_orbit.color = (0.38, 0.38, 0.44, 1)
                                         button_orbit.update_button("ORBIT OFF", font)
@@ -938,38 +1132,36 @@ def main():
                                         button_orbit.color = (0.80, 0.15, 0.15, 1)
                                         button_orbit.update_button("ORBIT ON", font)
                                         ORBIT_ON = 1
-                                if (button_reset.x <= mouse_x <= button_reset.x + button_reset.width and
-                                button_reset.y <= mouse_y <= button_reset.y + button_reset.height):
-                                    tab_planets = reset(tab_planets,menu)
+                                if button_reset.hit_test(mouse_x, mouse_y):
+                                    tab_planets = reset(tab_planets, menu)
                                     move = 0
                                     incremented_speed = 1
-                                    del camera
-                                    camera = Camera_Position(150,100,50,0,0,0)
-                                if (button_plus.x <= mouse_x <= button_plus.x + button_plus.width and
-                                button_plus.y <= mouse_y <= button_plus.y + button_plus.height):
-                                        if (SPEED<500):
-                                            SPEED *= 2
-                                            button_speed.update_button("x %.2f"%(SPEED/60),font)
-                                if (button_minus.x <= mouse_x <= button_minus.x + button_minus.width and
-                                button_minus.y <= mouse_y <= button_minus.y + button_minus.height):
-                                        if (SPEED>9):
-                                            SPEED /=2
-                                            button_speed.update_button("x %.2f"%(SPEED/60),font)
-                                if (button_quit.x <= mouse_x <= button_quit.x + button_quit.width and
-                                button_quit.y <= mouse_y <= button_quit.y + button_quit.height):
-                                        run = False
-                                        running_menu = False
-                                if (button_earth_speed.x <= mouse_x <= button_earth_speed.x + button_earth_speed.width and
-                                button_earth_speed.y <= mouse_y <= button_earth_speed.y + button_earth_speed.height):
-                                        tab_planets = reset(tab_planets,menu)
-                                        menu = 0
-                                        run = 0
+                                    camera = Camera_Position(150, 100, 50, 0, 0, 0)
+                                if button_plus.hit_test(mouse_x, mouse_y):
+                                    if SPEED < 500:
+                                        SPEED *= 2
+                                        button_speed.update_button("x %.2f" % (SPEED/60), font)
+                                if button_minus.hit_test(mouse_x, mouse_y):
+                                    if SPEED > 9:
+                                        SPEED /= 2
+                                        button_speed.update_button("x %.2f" % (SPEED/60), font)
+                                if button_quit.hit_test(mouse_x, mouse_y):
+                                    run = False
+                                    running_menu = False
+                                if button_earth_speed.hit_test(mouse_x, mouse_y):
+                                    tab_planets = reset(tab_planets, menu)
+                                    menu = 0
+                                    run = 0
 
                         # Right click to cancel placement in sandbox
                         if event.button == 3 and menu == 3:
                             sandbox_mode = SANDBOX_IDLE
                             sandbox_pending_planet = None
                             sandbox_pending_pos = None
+                        if event.button == 3 and menu == 4:
+                            e3d_launch_mode = False
+                            button_launch.update_button("Lancer Sat.", font)
+                            button_launch.color = SIM_TEAL_E
 
                 handle_keys(camera)
                 if menu != 3 or not sandbox_paused:
@@ -993,6 +1185,10 @@ def main():
                     gluLookAt(camera_x+camera.pos_x, camera_y+camera.pos_y,camera_z+camera.pos_z, camera_x+camera.angle_x, camera_y+camera.angle_y,camera_z+camera.angle_z, 0, 0, 1)
                 elif menu == 2 or menu == 3:
                     gluLookAt(camera.pos_x+10, camera.pos_y+0,camera.pos_z+20, camera.angle_x, camera.angle_y,camera.angle_z, 0, 0, 1)
+                elif menu == 4:
+                    camera.reset_angles()
+                    gluLookAt(camera.pos_x, camera.pos_y, camera.pos_z,
+                              camera.angle_x, camera.angle_y, camera.angle_z, 0, 0, 1)
 
 
                 # init the view matrix
@@ -1011,7 +1207,8 @@ def main():
 
                 #draw images, axys and grid
                 draw_image(texture)
-                draw_axys()
+                if menu != 4:
+                    draw_axys()
                 if menu == 1:
                     draw_gravity_grid(tab_planets, SCALE, grid_range=120, grid_steps=22, z_scale=80, z_offset=-10)
                 elif menu == 2 or menu == 3:
@@ -1068,7 +1265,16 @@ def main():
                         except Exception:
                             pass
 
-                    # Store matrices for gluUnProject
+                elif menu == 4:
+                    for planet in tab_planets:
+                        planet.update_position(tab_planets, TIMESTEP)
+                        planet.draw(SCALE)
+                    if e3d_orbit_on:
+                        for sat in satellites:
+                            sat.draw_orbit(SCALE)
+
+                # Store matrices for gluUnProject (needed by menu 3 and 4)
+                if menu in (3, 4):
                     last_modelview = glGetDoublev(GL_MODELVIEW_MATRIX)
                     last_projection = glGetDoublev(GL_PROJECTION_MATRIX)
                     last_viewport = glGetIntegerv(GL_VIEWPORT)
@@ -1107,21 +1313,25 @@ def main():
                     else:
                         elapsed_time = move / 360
                         status_text = "%.2f ans" % elapsed_time
-                    status_surface = font.render(status_text, False, (255, 200, 100))
-                    status_data = pygame.image.tobytes(status_surface, "RGBA", True)
-                    glRasterPos2f(50, display[1] - 80)
-                    glDrawPixels(status_surface.get_width(), status_surface.get_height(), GL_RGBA, GL_UNSIGNED_BYTE, status_data)
-
-                    # Mode indicator
+                    draw_text_overlay(font, status_text, (255, 200, 100), 50, display[1] - 80)
                     mode_names = {SANDBOX_IDLE: "", SANDBOX_PLACING_SUN: "Cliquez pour placer un Soleil",
                                   SANDBOX_PLACING_PLANET_POS: "Cliquez pour placer une Planete",
                                   SANDBOX_PLACING_PLANET_VEL: "Cliquez pour definir la vitesse"}
                     mode_txt = mode_names.get(sandbox_mode, "")
                     if mode_txt:
-                        mode_surface = font.render(mode_txt, False, (100, 255, 100))
-                        mode_data = pygame.image.tobytes(mode_surface, "RGBA", True)
-                        glRasterPos2f(50, display[1] - 110)
-                        glDrawPixels(mode_surface.get_width(), mode_surface.get_height(), GL_RGBA, GL_UNSIGNED_BYTE, mode_data)
+                        draw_text_overlay(font, mode_txt, (100, 255, 100), 50, display[1] - 110)
+
+                # Earth 3D status text
+                if menu == 4:
+                    elapsed_min = move * TIMESTEP_EARTH / 60.0
+                    if elapsed_min < 120:
+                        time_str = "Temps: %.0f min" % elapsed_min
+                    else:
+                        time_str = "Temps: %.1f h" % (elapsed_min / 60)
+                    draw_text_overlay(font, time_str, (255, 200, 100), 50, display[1] - 80)
+                    draw_text_overlay(font, "Satellites: %d" % len(satellites), (100, 200, 255), 50, display[1] - 110)
+                    if e3d_launch_mode:
+                        draw_text_overlay(font, "Cliquez sur la Terre pour lancer", (100, 255, 100), 50, display[1] - 140)
 
                 glDisable(GL_BLEND)
                 glEnable(GL_DEPTH_TEST)
