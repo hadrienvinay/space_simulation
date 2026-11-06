@@ -17,6 +17,9 @@ python main.py
 python game_menu.py
 # Only solar system
 python simulation_3d.py
+# Univers primordial : formation des galaxies (N-corps cosmologique)
+# inclut un mode masse negative (modele Janus bimetrique)
+python simulation_universe.py
 
 
 curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py Pour dl pip

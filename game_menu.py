@@ -10,6 +10,7 @@ from OpenGL.GL.ARB.fragment_shader import *
 import math
 import sys
 import time
+import datetime
 import json
 import random
 from collections import deque
@@ -25,6 +26,10 @@ SCALE_1 = 15000 / AU # 1AU = 500 pixel
 SCALE_2 = 150 / AU # 1AU = 500 pixel
 TIMESTEP_1 = 3600  # 1 day = *24 , here 1hour
 TIMESTEP_2 = 3600 * 24 # 1 day = *24 , here 1 day
+SCALE_THREE  = 5e-8      # L=1e9 m → 50 visual units (figure-8 orbit)
+TIMESTEP_THREE = 3600    # 1 hour/step for numerical stability
+SOFTENING    = 1e7       # Plummer softening length in metres (10 000 km)
+SUBSTEP_MAX  = 64        # maximum adaptive sub-steps per rendered frame
 
 # Earth 3D mode constants
 SCALE_EARTH = 10.0 / 6.371e6          # Earth radius = 10 visual units
@@ -196,40 +201,38 @@ class Planet:
             glDisable(GL_TEXTURE_2D)
         glPopMatrix()
 
-    def update_position(self,planets,TIMESTEP):
-        total_fx = total_fy = total_fz = 0
-        for planet in planets:
-            if self == planet:
-                continue
-            # Skip negligible satellite-satellite gravity
-            if self.mass < 1e10 and planet.mass < 1e10:
-                continue
-            fx, fy, fz = self.attraction(planet)
-            total_fx += fx
-            total_fy += fy
-            total_fz += fz
+    def update_position(self, planets, TIMESTEP, substeps=1):
+        dt = TIMESTEP / substeps
+        for _ in range(substeps):
+            total_fx = total_fy = total_fz = 0
+            for planet in planets:
+                if self == planet:
+                    continue
+                # Skip negligible satellite-satellite gravity
+                if self.mass < 1e10 and planet.mass < 1e10:
+                    continue
+                fx, fy, fz = self.attraction(planet)
+                total_fx += fx
+                total_fy += fy
+                total_fz += fz
+            self.x_vel += total_fx / self.mass * dt
+            self.y_vel += total_fy / self.mass * dt
+            self.z_vel += total_fz / self.mass * dt
+            self.x += self.x_vel * dt
+            self.y += self.y_vel * dt
+            self.z += self.z_vel * dt
+        self.orbit.append((self.x, self.y, self.z))
 
-        self.x_vel += total_fx / self.mass * TIMESTEP  # a = f / m * timestep (here 1 day)
-        self.y_vel += total_fy / self.mass * TIMESTEP
-        self.z_vel += total_fz / self.mass * TIMESTEP
-
-        self.x += self.x_vel * TIMESTEP
-        self.y += self.y_vel * TIMESTEP
-        self.z += self.z_vel * TIMESTEP
-        self.orbit.append((self.x, self.y,self.z))
-    
     def attraction(self, other):
-        other_x, other_y, other_z = other.x, other.y, other.z
-        distance_x = other_x - self.x
-        distance_y = other_y - self.y
-        distance_z = other_z - self.z
-        distance2 = math.sqrt(distance_x ** 2 + distance_y ** 2 + distance_z **2)
-        force2 =  G * self.mass * other.mass / distance2 ** 2
-        # Correct 3D vector decomposition (replaces atan2-based 2D approximation)
-        force_x = force2 * distance_x / distance2
-        force_y = force2 * distance_y / distance2
-        force_z = force2 * distance_z / distance2
-        return force_x, force_y, force_z
+        dx = other.x - self.x
+        dy = other.y - self.y
+        dz = other.z - self.z
+        r2 = dx*dx + dy*dy + dz*dz
+        # Plummer softening: replaces 1/r² with 1/(r²+ε²), caps force at close range
+        soft_r = math.sqrt(r2 + SOFTENING * SOFTENING)
+        f = G * self.mass * other.mass / (soft_r * soft_r)
+        inv = 1.0 / soft_r
+        return f * dx * inv, f * dy * inv, f * dz * inv
 
     def draw_orbit(self, SCALE):
         points = len(self.orbit)
@@ -531,63 +534,166 @@ def launch_rocket_to_moon(tab_planets, SCALE):
     return rocket
 
 def init_earth_moon(tab_planets):
+    M_EARTH = 5.972e24
+    M_MOON  = 7.347e22
+    V_MOON  = 1.022e3   # m/s orbital speed relative to Earth
+
     texture_earth = load_image("textures/earth_test.jpg")
-    earth = Planet(0,0,0,10,BLUE,5.97*10**24,0,0,texture_earth,5)
-    earth.y_vel = -29.786 * 10 #vitesse rotation autour soleil : 30km/s
+    earth = Planet(0, 0, 0, 10, BLUE, M_EARTH, 0, 0, texture_earth, 5)
+    # Conservation of momentum: Earth recoils opposite to Moon's orbital velocity
+    earth.y_vel = -(M_MOON / M_EARTH) * V_MOON   # ≈ -12.6 m/s
     earth.orbit.append((earth.x, earth.y, earth.z))
+
+    # Moon distance ~384 400 km; 5.1° orbital inclination gives z ≈ 3.4e7 m
     texture_moon = load_image("textures/moon_test.jpg")
-    moon  = Planet(earth.x - 0.0026*AU, 0,0.0002*AU,5,DARK_GREY,7.347*10**22,0,0,texture_moon,0)
-    moon.y_vel = earth.y_vel
-    moon.y_vel += 1.02 * 1000 #v orbitale : 1.02km/s
+    moon = Planet(-3.844e8, 0, 3.4e7, 5, DARK_GREY, M_MOON, 0, 0, texture_moon, 0)
+    # Orbital velocity is perpendicular to the radius vector (-3.844e8, 0, 3.4e7)
+    # y-component only → dot product with radius = 0  ✓
+    moon.y_vel = earth.y_vel + V_MOON
     moon.orbit.append((moon.x, moon.y, moon.z))
+
     tab_planets.append(earth)
     tab_planets.append(moon)
 
-def init_planet(tab_planets):
+# Keplerian elements at epoch J2000.0 and their rates per Julian century.
+# Standard JPL/Standish low-precision set, valid ~1800-2050 AD.
+# a: semi-major axis (AU), e: eccentricity, I: inclination (deg),
+# L: mean longitude (deg), peri: longitude of perihelion (deg), node: longitude of ascending node (deg)
+PLANET_ORBITAL_ELEMENTS = {
+    "mercury": dict(a=0.38709927, a_dot=0.00000037, e=0.20563593, e_dot=0.00001906,
+                     I=7.00497902, I_dot=-0.00594749, L=252.25032350, L_dot=149472.67411175,
+                     peri=77.45779628, peri_dot=0.16047689, node=48.33076593, node_dot=-0.12534081),
+    "venus": dict(a=0.72333566, a_dot=0.00000390, e=0.00677672, e_dot=-0.00004107,
+                   I=3.39467605, I_dot=-0.00078890, L=181.97909950, L_dot=58517.81538729,
+                   peri=131.60246718, peri_dot=0.00268329, node=76.67984255, node_dot=-0.27769418),
+    "earth": dict(a=1.00000261, a_dot=0.00000562, e=0.01671123, e_dot=-0.00004392,
+                   I=-0.00001531, I_dot=-0.01294668, L=100.46457166, L_dot=35999.37244981,
+                   peri=102.93768193, peri_dot=0.32327364, node=0.0, node_dot=0.0),
+    "mars": dict(a=1.52371034, a_dot=0.00001847, e=0.09339410, e_dot=0.00007882,
+                  I=1.84969142, I_dot=-0.00813131, L=-4.55343205, L_dot=19140.30268499,
+                  peri=-23.94362959, peri_dot=0.44441088, node=49.55953891, node_dot=-0.29257343),
+    "jupiter": dict(a=5.20288700, a_dot=-0.00011607, e=0.04838624, e_dot=-0.00013253,
+                     I=1.30439695, I_dot=-0.00183714, L=34.39644051, L_dot=3034.74612775,
+                     peri=14.72847983, peri_dot=0.21252668, node=100.47390909, node_dot=0.20469106),
+    "saturn": dict(a=9.53667594, a_dot=-0.00125060, e=0.05386179, e_dot=-0.00050991,
+                    I=2.48599187, I_dot=0.00193609, L=49.95424423, L_dot=1222.49362201,
+                    peri=92.59887831, peri_dot=-0.41897216, node=113.66242448, node_dot=-0.28867794),
+    "uranus": dict(a=19.18916464, a_dot=-0.00196176, e=0.04725744, e_dot=-0.00004397,
+                    I=0.77263783, I_dot=-0.00242939, L=313.23810451, L_dot=428.48202785,
+                    peri=170.95427630, peri_dot=0.40805281, node=74.01692503, node_dot=0.04240589),
+    "neptune": dict(a=30.06992276, a_dot=0.00026291, e=0.00859048, e_dot=0.00005105,
+                     I=1.77004347, I_dot=0.00035372, L=-55.12002969, L_dot=218.45945325,
+                     peri=44.96476227, peri_dot=-0.32241464, node=131.78422574, node_dot=-0.00508664),
+}
+
+J2000_EPOCH = datetime.datetime(2000, 1, 1, 12, 0, 0)
+
+def days_since_j2000(date):
+    if isinstance(date, datetime.datetime):
+        dt = date
+    else:
+        dt = datetime.datetime.combine(date, datetime.time())
+    return (dt - J2000_EPOCH).total_seconds() / 86400.0
+
+def solve_kepler(M, e):
+    E = M
+    for _ in range(50):
+        dE = (E - e * math.sin(E) - M) / (1 - e * math.cos(E))
+        E -= dE
+        if abs(dE) < 1e-12:
+            break
+    return E
+
+def heliocentric_state(elements, days, GM):
+    T = days / 36525.0
+    a = (elements["a"] + elements["a_dot"] * T) * AU
+    e = elements["e"] + elements["e_dot"] * T
+    I = math.radians(elements["I"] + elements["I_dot"] * T)
+    L = elements["L"] + elements["L_dot"] * T
+    peri = elements["peri"] + elements["peri_dot"] * T
+    node = elements["node"] + elements["node_dot"] * T
+    omega = math.radians(peri - node)
+    node = math.radians(node)
+
+    M = math.radians((L - peri + 180) % 360 - 180)
+    E = solve_kepler(M, e)
+
+    x_orb = a * (math.cos(E) - e)
+    y_orb = a * math.sqrt(1 - e * e) * math.sin(E)
+    r = a * (1 - e * math.cos(E))
+    n = math.sqrt(GM / (a ** 3))
+    vx_orb = -n * a * a / r * math.sin(E)
+    vy_orb = n * a * a / r * math.sqrt(1 - e * e) * math.cos(E)
+
+    cos_o, sin_o = math.cos(omega), math.sin(omega)
+    cos_n, sin_n = math.cos(node), math.sin(node)
+    cos_i, sin_i = math.cos(I), math.sin(I)
+
+    def rotate(px, py):
+        x = (cos_n * cos_o - sin_n * sin_o * cos_i) * px + (-cos_n * sin_o - sin_n * cos_o * cos_i) * py
+        y = (sin_n * cos_o + cos_n * sin_o * cos_i) * px + (-sin_n * sin_o + cos_n * cos_o * cos_i) * py
+        z = (sin_o * sin_i) * px + (cos_o * sin_i) * py
+        return x, y, z
+
+    x, y, z = rotate(x_orb, y_orb)
+    vx, vy, vz = rotate(vx_orb, vy_orb)
+    return x, y, z, vx, vy, vz
+
+def init_planet(tab_planets, date=None):
+    if date is None:
+        date = datetime.date.today()
+    days = days_since_j2000(date)
+    SUN_MASS = 1.98892 * 10**30
+    GM = G * SUN_MASS
+
+    x,y,z,vx,vy,vz = heliocentric_state(PLANET_ORBITAL_ELEMENTS["mercury"], days, GM)
     texture_mercury = load_image("textures/mercury.jpg")
-    mercury  = Planet(0.39*AU,0,0,2,DARK_GREY,0.33*10**24,0,0,texture_mercury,8)
-    #mercury.y_vel = -170496 *1.6
-    mercury.y_vel = 47.4 * 1000
+    mercury  = Planet(x,y,z,2,DARK_GREY,0.33*10**24,0,0,texture_mercury,8)
+    mercury.x_vel, mercury.y_vel, mercury.z_vel = vx, vy, vz
     mercury.orbit.append((mercury.x, mercury.y, mercury.z))
+
+    x,y,z,vx,vy,vz = heliocentric_state(PLANET_ORBITAL_ELEMENTS["venus"], days, GM)
     texture_venus = load_image("textures/venus.jpg")
-    venus    = Planet(0.72*AU,0,0,3,GREEN,4.87*10**24,0,0,texture_venus,0.01)
-    #venus.x_vel = 12600* 1.4
-    venus.y_vel = 35.02 * 1000
+    venus    = Planet(x,y,z,3,GREEN,4.87*10**24,0,0,texture_venus,0.01)
+    venus.x_vel, venus.y_vel, venus.z_vel = vx, vy, vz
     venus.orbit.append((venus.x, venus.y, venus.z))
+
+    x,y,z,vx,vy,vz = heliocentric_state(PLANET_ORBITAL_ELEMENTS["earth"], days, GM)
     texture_earth = load_image("textures/earth.jpg")
-    earth    = Planet(1*AU,0,0,4,BLUE,5.97*10**24,0,0,texture_earth,10)
-    #earth.y_vel = -107206* 1.3
-    earth.y_vel = 29.783 * 1000 #vitesse rotation autour soleil : 30km/s
+    earth    = Planet(x,y,z,4,BLUE,5.97*10**24,0,0,texture_earth,10)
+    earth.x_vel, earth.y_vel, earth.z_vel = vx, vy, vz
     earth.orbit.append((earth.x, earth.y, earth.z))
-    #texture_moon = load_image("textures/moon.jpg")
-    #moon    = Planet(earth.x - 0.0026*AU, 0,0,0.1,DARK_GREY,7.347*10**22,0,0,texture_moon,8)
-    #moon.y_vel = earth.y_vel + 1.02 * 1000 #v orbitale : 1.02km/s
-    #moon.orbit.append((moon.x, moon.y, moon.z))
+
+    x,y,z,vx,vy,vz = heliocentric_state(PLANET_ORBITAL_ELEMENTS["mars"], days, GM)
     texture_mars = load_image("textures/mars.jpg")
-    mars     = Planet(1.52*AU,0,0,3,RED,0.642*10**24,0,0,texture_mars,0)
-    #mars.y_vel = -86425* 1.6
-    mars.y_vel = 24.077 * 1000
+    mars     = Planet(x,y,z,3,RED,0.642*10**24,0,0,texture_mars,0)
+    mars.x_vel, mars.y_vel, mars.z_vel = vx, vy, vz
     mars.orbit.append((mars.x, mars.y,mars.z))
+
+    x,y,z,vx,vy,vz = heliocentric_state(PLANET_ORBITAL_ELEMENTS["jupiter"], days, GM)
     texture_jupiter = load_image("textures/jupiter.jpg")
-    jupiter  = Planet(-5.2*AU,0,0,8,ORANGE,1.9*10**27,0,0,texture_jupiter,0)
-    #jupiter.y_vel = -47052* 1.5
-    jupiter.y_vel = -13.06* 1000
+    jupiter  = Planet(x,y,z,8,ORANGE,1.9*10**27,0,0,texture_jupiter,0)
+    jupiter.x_vel, jupiter.y_vel, jupiter.z_vel = vx, vy, vz
     jupiter.orbit.append((jupiter.x, jupiter.y,jupiter.z))
+
+    x,y,z,vx,vy,vz = heliocentric_state(PLANET_ORBITAL_ELEMENTS["saturn"], days, GM)
     texture_saturn = load_image("textures/saturn.jpg")
-    saturn   = Planet(-9.55*AU,0,0,7,YELLOW,1.9*10**27,0,0,texture_saturn,0)
-    #saturn.y_vel = -34848* 1.5
-    saturn.y_vel = -9.68 * 1000
+    saturn   = Planet(x,y,z,7,YELLOW,5.683e26,0,0,texture_saturn,0)
+    saturn.x_vel, saturn.y_vel, saturn.z_vel = vx, vy, vz
     saturn.orbit.append((saturn.x, saturn.y, saturn.z))
-    uranus   = Planet(19.22*AU,0,0,6,BLUE,568*10**24,0,0,0,0)
-    #uranus.y_vel = -32480
-    uranus.y_vel = 6.80 * 1000
+
+    x,y,z,vx,vy,vz = heliocentric_state(PLANET_ORBITAL_ELEMENTS["uranus"], days, GM)
+    uranus   = Planet(x,y,z,6,BLUE,8.681e25,0,0,0,0)
+    uranus.x_vel, uranus.y_vel, uranus.z_vel = vx, vy, vz
     uranus.orbit.append((uranus.x, uranus.y, uranus.z))
-    neptune  = Planet(30.11*AU,0,0,5,WHITE,0.33*10**24,0,0,0,0)
-    #neptune.y_vel = -19548
-    neptune.y_vel = 5.43 * 1000
+
+    x,y,z,vx,vy,vz = heliocentric_state(PLANET_ORBITAL_ELEMENTS["neptune"], days, GM)
+    neptune  = Planet(x,y,z,5,(63,84,186),1.024e26,0,0,0,0)
+    neptune.x_vel, neptune.y_vel, neptune.z_vel = vx, vy, vz
     neptune.orbit.append((neptune.x, neptune.y, neptune.z))
+
     texture_sun = load_image("textures/sun2.jpg")
-    sun = Planet(0,0,0,8, WHITE, 1.98892 * 10**30,0,1,texture_sun,1)
+    sun = Planet(0,0,0,8, WHITE, SUN_MASS,0,1,texture_sun,1)
     #sun2 = Planet(5*AU,0.5*AU,0,8, WHITE, 1.98892 * 10**30,0,1)
     #sun2.y_vel = -10 * 1000
     #sun.z_vel = 1 * 1000
@@ -602,6 +708,128 @@ def init_planet(tab_planets):
     tab_planets.append(saturn)
     tab_planets.append(uranus)
     tab_planets.append(neptune)
+
+def init_three_body(tab_planets, mode=1):
+    """Known periodic three-body solutions, all scaled to Earth masses.
+    Normalised units: G=m=1, L=1e9 m, v_scale = sqrt(G*M_earth/L) ≈ 631 m/s.
+    mode 1 – Figure-8            Chenciner & Montgomery (2000)
+    mode 2 – Triangle de Lagrange Lagrange (1772)
+    mode 3 – Papillon            Šuvakov & Dmitrašinović (2013)
+    mode 4 – Euler Collinéaire   Euler (1767) – analytically exact, unstable
+    mode 5 – Binaire + Planète   hierarchical triple (binary + outer planet)"""
+    L = 1e9
+    v = math.sqrt(G * EARTH_MASS / L)   # ~631 m/s
+
+    if mode == 1:
+        # ── Figure-8 choreography ─────────────────────────────────────────
+        x0, y0   = 0.97000436, 0.24308753
+        vx0, vy0 = 0.93240737, 0.86473146
+        bodies = [
+            ((-x0,  y0), (vx0/2,  vy0/2), BLUE),
+            (( x0, -y0), (vx0/2,  vy0/2), RED),
+            (( 0.0, 0.0), (-vx0,   -vy0), GREEN),
+        ]
+
+    elif mode == 2:
+        # ── Lagrange equilateral triangle, side a=2 ───────────────────────
+        # ω = √(3/a³) = √(3/8); v = √(Gm/a) = 1/√2; R = a/√3
+        R   = 2 / math.sqrt(3)   # centroid-to-vertex ≈ 1.1547
+        spd = math.sqrt(0.5)     # orbital speed = 1/√2 ≈ 0.7071
+        s3  = math.sqrt(3) / 2   # sin 60° — note y = R·s3 = 1.0 exactly
+        bodies = [
+            (( R,    0.0), (0.0,       spd),   BLUE),
+            ((-R/2,  1.0), (-s3*spd,  -spd/2), RED),
+            ((-R/2, -1.0), ( s3*spd,  -spd/2), GREEN),
+        ]
+
+    elif mode == 3:
+        # ── Butterfly I choreography ──────────────────────────────────────
+        # Šuvakov & Dmitrašinović (2013), Table 1; T ≈ 6.2356
+        bodies = [
+            (( 1.0, 0.0), ( 0.30674,  0.12540), BLUE),
+            ((-1.0, 0.0), ( 0.30674,  0.12540), RED),
+            (( 0.0, 0.0), (-0.61348, -0.25080), GREEN),
+        ]
+
+    elif mode == 4:
+        # ── Euler's collinear rotating solution (1767) ────────────────────
+        # Three equal masses at −1, 0, +1; outer bodies orbit the stationary centre.
+        # Force on outer body: F = Gm²/1² + Gm²/4 = 5Gm²/4
+        # Centripetal: mω²·1 = 5Gm/4  →  ω = √(5/4) (normalised G=m=1)
+        # Centre body stays at rest (forces cancel by symmetry).
+        # NOTE: this equilibrium is UNSTABLE — numerical errors will
+        # eventually trigger chaotic divergence (demonstrating Euler instability).
+        om = math.sqrt(5.0 / 4.0)   # ≈ 1.11803
+        bodies = [
+            ((-1.0, 0.0), (0.0, -om),  RED),
+            (( 0.0, 0.0), (0.0,  0.0), WHITE),
+            (( 1.0, 0.0), (0.0, +om),  BLUE),
+        ]
+
+    else:
+        # ── Hierarchical triple: tight binary + distant planet ─────────────
+        # Binary semi-separation d=0.04, planet radius R=0.8 (both × L).
+        # d << R  →  T_inner/T_outer ≈ 1/32  (binary spins ~32× per planet orbit).
+        # Binary orbital speed: v_b = 1/(2√d) = 2.5 (normalised)
+        # Planet orbital speed: v_p = √(2/R) = √2.5 ≈ 1.5811 (normalised)
+        # Binary CM gets recoil −v_p/2 so total linear momentum = 0.
+        d   = 0.04
+        R   = 0.80
+        v_b = 1.0 / (2.0 * math.sqrt(d))          # = 2.5
+        v_p = math.sqrt(2.0 / R)                   # ≈ 1.5811
+        bodies = [
+            ((-d,  0.0), (0.0, -(v_b + v_p / 2.0)), YELLOW),   # étoile A
+            (( d,  0.0), (0.0,  (v_b - v_p / 2.0)), ORANGE),   # étoile B
+            (( R,  0.0), (0.0,   v_p),               BLUE),     # planète
+        ]
+
+    for (px, py), (pvx, pvy), color in bodies:
+        p = Planet(px * L, py * L, 0, 4, color, EARTH_MASS, 0, 0, 0, 0)
+        p.x_vel = pvx * v
+        p.y_vel = pvy * v
+        p.orbit.append((p.x, p.y, p.z))
+        tab_planets.append(p)
+
+def step_all_synchronized(planets, dt):
+    """One symplectic-Euler step where ALL forces are computed from the current
+    position snapshot before ANY body is moved.
+    Each pair is evaluated once and Newton's 3rd law is enforced exactly."""
+    n = len(planets)
+    forces = [[0.0, 0.0, 0.0] for _ in range(n)]
+    for i in range(n):
+        for j in range(i + 1, n):
+            pi, pj = planets[i], planets[j]
+            if pi.mass < 1e10 and pj.mass < 1e10:
+                continue
+            fx, fy, fz = pi.attraction(pj)
+            forces[i][0] += fx;  forces[i][1] += fy;  forces[i][2] += fz
+            forces[j][0] -= fx;  forces[j][1] -= fy;  forces[j][2] -= fz
+    for p, f in zip(planets, forces):
+        inv_m = 1.0 / p.mass
+        p.x_vel += f[0] * inv_m * dt
+        p.y_vel += f[1] * inv_m * dt
+        p.z_vel += f[2] * inv_m * dt
+        p.x += p.x_vel * dt
+        p.y += p.y_vel * dt
+        p.z += p.z_vel * dt
+
+def adaptive_substeps(tab_planets, dt_frame):
+    """Physics-derived sub-step count: keep Δv/v_orbital < 1% per sub-step.
+    Condition: dt_sub < ε × v_orb/a = ε × r^1.5 / √(GM)
+    → n = dt_frame × √(GM) / (ε × r^1.5),  ε = 0.01."""
+    if len(tab_planets) < 2:
+        return 1
+    min_d2 = float('inf')
+    for i in range(len(tab_planets)):
+        for j in range(i + 1, len(tab_planets)):
+            p, q = tab_planets[i], tab_planets[j]
+            d2 = (p.x-q.x)**2 + (p.y-q.y)**2 + (p.z-q.z)**2
+            if d2 < min_d2:
+                min_d2 = d2
+    min_d = max(math.sqrt(min_d2), 1.0)          # avoid division by zero
+    GM    = G * max(p.mass for p in tab_planets)  # dominant mass term
+    n     = int(dt_frame * math.sqrt(GM) / (0.01 * min_d ** 1.5))
+    return max(1, min(SUBSTEP_MAX, n))
 
 def handle_keys(camera):
     keypress = pygame.key.get_pressed()
@@ -630,16 +858,18 @@ def handle_keys(camera):
     if keypress[pygame.K_y]:
         camera.angle_y -=0.5
 
-def reset(tab_planets,menu):
+def reset(tab_planets, menu, three_corps_mode=1, date=None):
     new_tab = []
-    if menu == 1 :
+    if menu == 1:
         init_earth_moon(new_tab)
-    elif menu ==2 :
-        init_planet(new_tab)
+    elif menu == 2:
+        init_planet(new_tab, date)
     elif menu == 3:
         pass  # Sandbox starts empty
     elif menu == 4:
         init_earth_3d(new_tab)
+    elif menu == 5:
+        init_three_body(new_tab, three_corps_mode)
     return new_tab
 
 def init_game(display):
@@ -671,7 +901,7 @@ def main():
     sub_data = pygame.image.tobytes(sub_surface, "RGBA", True)
 
     BTN_W, BTN_H, GAP = 340, 62, 16
-    _total_btn_h = 5 * BTN_H + 4 * GAP          # 310 + 64 = 374
+    _total_btn_h = 6 * BTN_H + 5 * GAP
     menu_start_x = WIDTH // 2 - BTN_W // 2      # centered
     menu_start_y = HEIGHT // 2 - _total_btn_h // 2 - 40  # shifted down to leave room for title
 
@@ -680,7 +910,11 @@ def main():
     COL_PURPLE = (0.55, 0.20, 0.75, 1)
     COL_TEAL   = (0.10, 0.60, 0.60, 1)
     COL_RED    = (0.72, 0.10, 0.10, 1)
+    COL_CYAN   = (0.10, 0.72, 0.78, 1)
 
+    button_three_corps = Button(pygame.Rect(menu_start_x, menu_start_y + 5*(BTN_H + GAP), BTN_W, BTN_H),
+                        font_menu.render("3 CORPS", False, (255, 255, 255)),
+                        COL_CYAN, font_menu, text_color=(255, 255, 255))
     button_earth = Button(pygame.Rect(menu_start_x, menu_start_y + 4*(BTN_H + GAP), BTN_W, BTN_H),
                         font_menu.render("TERRE - LUNE", False, (255, 255, 255)),
                         COL_BLUE, font_menu, text_color=(255, 255, 255))
@@ -696,15 +930,64 @@ def main():
     button_quit_menu = Button(pygame.Rect(menu_start_x, menu_start_y, BTN_W, BTN_H),
                         font_menu.render("QUITTER", False, (255, 255, 255)),
                         COL_RED, font_menu, text_color=(255, 255, 255))
-    buttons_menu = [button_earth, button_solar_system, button_sandbox, button_earth_3d, button_quit_menu]
+    buttons_menu = [button_three_corps, button_earth, button_solar_system, button_sandbox, button_earth_3d, button_quit_menu]
 
     texture_menu_bg = 0  # loaded lazily (reloaded after context recreation)
+
+    # ── 3-corps sub-menu state ─────────────────────────────────────────────
+    three_corps_mode    = 1     # 1=figure-8  2=Lagrange  3=Butterfly  4=Euler  5=Binary
+    three_corps_submenu = False
+
+    _sub_total_h = 6 * BTN_H + 5 * GAP   # 5 modes + back button
+    sub_start_x  = menu_start_x
+    sub_start_y  = HEIGHT // 2 - _sub_total_h // 2
+
+    sub_title_surf = font_title.render("3 Corps  —  Choisissez la configuration",
+                                       False, (160, 220, 255))
+    sub_tw, sub_th = sub_title_surf.get_size()
+    sub_title_data = pygame.image.tobytes(sub_title_surf, "RGBA", True)
+
+    COL_FIG8  = (0.10, 0.72, 0.78, 1)
+    COL_LAG   = (0.20, 0.68, 0.28, 1)
+    COL_BUTT  = (0.72, 0.28, 0.60, 1)
+    COL_EULER = (0.78, 0.40, 0.08, 1)
+    COL_BIN   = (0.22, 0.20, 0.70, 1)
+    COL_BACK  = (0.40, 0.40, 0.46, 1)
+
+    button_binary = Button(
+        pygame.Rect(sub_start_x, sub_start_y + 5*(BTN_H+GAP), BTN_W, BTN_H),
+        font_menu.render("Binaire + Planete", False, (255,255,255)),
+        COL_BIN, font_menu, text_color=(255,255,255))
+    button_euler = Button(
+        pygame.Rect(sub_start_x, sub_start_y + 4*(BTN_H+GAP), BTN_W, BTN_H),
+        font_menu.render("Euler Colineaire", False, (255,255,255)),
+        COL_EULER, font_menu, text_color=(255,255,255))
+    button_fig8 = Button(
+        pygame.Rect(sub_start_x, sub_start_y + 3*(BTN_H+GAP), BTN_W, BTN_H),
+        font_menu.render("Orbite en 8", False, (255,255,255)),
+        COL_FIG8, font_menu, text_color=(255,255,255))
+    button_lagrange = Button(
+        pygame.Rect(sub_start_x, sub_start_y + 2*(BTN_H+GAP), BTN_W, BTN_H),
+        font_menu.render("Triangle de Lagrange", False, (255,255,255)),
+        COL_LAG, font_menu, text_color=(255,255,255))
+    button_butterfly = Button(
+        pygame.Rect(sub_start_x, sub_start_y + 1*(BTN_H+GAP), BTN_W, BTN_H),
+        font_menu.render("Papillon", False, (255,255,255)),
+        COL_BUTT, font_menu, text_color=(255,255,255))
+    button_back = Button(
+        pygame.Rect(sub_start_x, sub_start_y, BTN_W, BTN_H),
+        font_menu.render("< Retour", False, (255,255,255)),
+        COL_BACK, font_menu, text_color=(255,255,255))
+    buttons_submenu = [button_binary, button_euler, button_fig8,
+                       button_lagrange, button_butterfly, button_back]
 
     while running_menu:
 
         move = 0
         run = True
         tab_planets = []
+        sim_date = None
+        sim_paused = False
         if menu == 0:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -718,16 +1001,42 @@ def main():
                         # Conversion des coordonnées OpenGL (viewport)
                         viewport = glGetIntegerv(GL_VIEWPORT)
                         mouse_y = viewport[3] - mouse_y  # Inversion Y
-                        if button_earth.hit_test(mouse_x, mouse_y):
-                            menu = 1
-                        elif button_solar_system.hit_test(mouse_x, mouse_y):
-                            menu = 2
-                        elif button_sandbox.hit_test(mouse_x, mouse_y):
-                            menu = 3
-                        elif button_earth_3d.hit_test(mouse_x, mouse_y):
-                            menu = 4
-                        elif button_quit_menu.hit_test(mouse_x, mouse_y):
-                            running_menu = 0
+                        if three_corps_submenu:
+                            if button_binary.hit_test(mouse_x, mouse_y):
+                                three_corps_mode = 5
+                                menu = 5
+                                three_corps_submenu = False
+                            elif button_euler.hit_test(mouse_x, mouse_y):
+                                three_corps_mode = 4
+                                menu = 5
+                                three_corps_submenu = False
+                            elif button_fig8.hit_test(mouse_x, mouse_y):
+                                three_corps_mode = 1
+                                menu = 5
+                                three_corps_submenu = False
+                            elif button_lagrange.hit_test(mouse_x, mouse_y):
+                                three_corps_mode = 2
+                                menu = 5
+                                three_corps_submenu = False
+                            elif button_butterfly.hit_test(mouse_x, mouse_y):
+                                three_corps_mode = 3
+                                menu = 5
+                                three_corps_submenu = False
+                            elif button_back.hit_test(mouse_x, mouse_y):
+                                three_corps_submenu = False
+                        else:
+                            if button_three_corps.hit_test(mouse_x, mouse_y):
+                                three_corps_submenu = True
+                            elif button_earth.hit_test(mouse_x, mouse_y):
+                                menu = 1
+                            elif button_solar_system.hit_test(mouse_x, mouse_y):
+                                menu = 2
+                            elif button_sandbox.hit_test(mouse_x, mouse_y):
+                                menu = 3
+                            elif button_earth_3d.hit_test(mouse_x, mouse_y):
+                                menu = 4
+                            elif button_quit_menu.hit_test(mouse_x, mouse_y):
+                                running_menu = 0
    
             # Load background texture (lazy, re-loaded after context recreation)
             if texture_menu_bg == 0:
@@ -764,49 +1073,84 @@ def main():
             glVertex2f(display[0], display[1]); glVertex2f(0, display[1])
             glEnd()
 
-            # ── Center panel (frosted dark) ────────────────────────────────
-            _px = menu_start_x - 52
-            _pw = BTN_W + 104
-            _py = menu_start_y - 36
-            _ph = _total_btn_h + text_height_menu + sub_h + 90
-            draw_gradient_rect(_px, _py, _pw, _ph,
-                               (0.10, 0.05, 0.22, 0.82), (0.05, 0.02, 0.14, 0.92))
-            # panel border
-            glColor4f(0.65, 0.40, 1.0, 0.35)
-            glLineWidth(1.0)
-            glBegin(GL_LINE_LOOP)
-            glVertex2f(_px, _py); glVertex2f(_px + _pw, _py)
-            glVertex2f(_px + _pw, _py + _ph); glVertex2f(_px, _py + _ph)
-            glEnd()
+            if three_corps_submenu:
+                # ── Sub-menu panel ─────────────────────────────────────────
+                _px = sub_start_x - 52
+                _pw = BTN_W + 104
+                _py = sub_start_y - 36
+                _ph = _sub_total_h + sub_th + 60
+                draw_gradient_rect(_px, _py, _pw, _ph,
+                                   (0.05, 0.12, 0.22, 0.88), (0.02, 0.06, 0.14, 0.95))
+                glColor4f(0.20, 0.70, 0.90, 0.40)
+                glLineWidth(1.0)
+                glBegin(GL_LINE_LOOP)
+                glVertex2f(_px, _py); glVertex2f(_px + _pw, _py)
+                glVertex2f(_px + _pw, _py + _ph); glVertex2f(_px, _py + _ph)
+                glEnd()
 
-            # ── Title ──────────────────────────────────────────────────────
-            title_x = WIDTH // 2 - text_width_menu // 2
-            title_y = menu_start_y + _total_btn_h + 38
-            glRasterPos2f(title_x, title_y)
-            glDrawPixels(text_width_menu, text_height_menu, GL_RGBA, GL_UNSIGNED_BYTE, text_data_menu)
+                # Sub-menu title
+                title_y = sub_start_y + _sub_total_h + 20
+                glRasterPos2f(WIDTH // 2 - sub_tw // 2, title_y)
+                glDrawPixels(sub_tw, sub_th, GL_RGBA, GL_UNSIGNED_BYTE, sub_title_data)
 
-            # Separator line under title
-            sep_y = title_y - 8
-            glColor4f(0.75, 0.45, 1.0, 0.5)
-            glLineWidth(1.5)
-            glBegin(GL_LINES)
-            glVertex2f(_px + 24, sep_y); glVertex2f(_px + _pw - 24, sep_y)
-            glEnd()
-            glLineWidth(1.0)
+                sep_y = title_y - 8
+                glColor4f(0.20, 0.70, 0.90, 0.50)
+                glLineWidth(1.5)
+                glBegin(GL_LINES)
+                glVertex2f(_px + 24, sep_y); glVertex2f(_px + _pw - 24, sep_y)
+                glEnd()
+                glLineWidth(1.0)
 
-            # Subtitle
-            glRasterPos2f(WIDTH // 2 - sub_w // 2, title_y + text_height_menu + 6)
-            glDrawPixels(sub_w, sub_h, GL_RGBA, GL_UNSIGNED_BYTE, sub_data)
+                # Sub-menu buttons
+                for button in buttons_submenu:
+                    draw_gradient_rect(button.x, button.y, button.width, button.height,
+                                       button.color, darken(button.color, 0.6))
+                    draw_button_border(button.x, button.y, button.width, button.height)
+                    glRasterPos2f(button.x + (button.width - button.text.get_width()) // 2,
+                                  button.y + (button.height - button.text.get_height()) // 2)
+                    glDrawPixels(button.text.get_width(), button.text.get_height(),
+                                 GL_RGBA, GL_UNSIGNED_BYTE, button.data)
+            else:
+                # ── Main menu panel ────────────────────────────────────────
+                _px = menu_start_x - 52
+                _pw = BTN_W + 104
+                _py = menu_start_y - 36
+                _ph = _total_btn_h + text_height_menu + sub_h + 90
+                draw_gradient_rect(_px, _py, _pw, _ph,
+                                   (0.10, 0.05, 0.22, 0.82), (0.05, 0.02, 0.14, 0.92))
+                glColor4f(0.65, 0.40, 1.0, 0.35)
+                glLineWidth(1.0)
+                glBegin(GL_LINE_LOOP)
+                glVertex2f(_px, _py); glVertex2f(_px + _pw, _py)
+                glVertex2f(_px + _pw, _py + _ph); glVertex2f(_px, _py + _ph)
+                glEnd()
 
-            # ── Buttons ────────────────────────────────────────────────────
-            for button in buttons_menu:
-                draw_gradient_rect(button.x, button.y, button.width, button.height,
-                                   button.color, darken(button.color, 0.6))
-                draw_button_border(button.x, button.y, button.width, button.height)
-                glRasterPos2f(button.x + (button.width - button.text.get_width()) // 2,
-                              button.y + (button.height - button.text.get_height()) // 2)
-                glDrawPixels(button.text.get_width(), button.text.get_height(),
-                             GL_RGBA, GL_UNSIGNED_BYTE, button.data)
+                # ── Title ──────────────────────────────────────────────────
+                title_x = WIDTH // 2 - text_width_menu // 2
+                title_y = menu_start_y + _total_btn_h + 38
+                glRasterPos2f(title_x, title_y)
+                glDrawPixels(text_width_menu, text_height_menu, GL_RGBA, GL_UNSIGNED_BYTE, text_data_menu)
+
+                sep_y = title_y - 8
+                glColor4f(0.75, 0.45, 1.0, 0.5)
+                glLineWidth(1.5)
+                glBegin(GL_LINES)
+                glVertex2f(_px + 24, sep_y); glVertex2f(_px + _pw - 24, sep_y)
+                glEnd()
+                glLineWidth(1.0)
+
+                glRasterPos2f(WIDTH // 2 - sub_w // 2, title_y + text_height_menu + 6)
+                glDrawPixels(sub_w, sub_h, GL_RGBA, GL_UNSIGNED_BYTE, sub_data)
+
+                # ── Main menu buttons ──────────────────────────────────────
+                for button in buttons_menu:
+                    draw_gradient_rect(button.x, button.y, button.width, button.height,
+                                       button.color, darken(button.color, 0.6))
+                    draw_button_border(button.x, button.y, button.width, button.height)
+                    glRasterPos2f(button.x + (button.width - button.text.get_width()) // 2,
+                                  button.y + (button.height - button.text.get_height()) // 2)
+                    glDrawPixels(button.text.get_width(), button.text.get_height(),
+                                 GL_RGBA, GL_UNSIGNED_BYTE, button.data)
 
             glDisable(GL_BLEND)
             glEnable(GL_DEPTH_TEST)
@@ -835,6 +1179,10 @@ def main():
                 text_surface = font.render("Terre 3D - Lanceur de Satellites", False, (255, 215, 255, 1))
                 SCALE = SCALE_EARTH
                 TIMESTEP = TIMESTEP_EARTH
+            elif menu == 5:
+                text_surface = font.render("3 Corps - Orbite en 8 (Chenciner & Montgomery)", False, (255, 215, 255, 1))
+                SCALE = SCALE_THREE
+                TIMESTEP = TIMESTEP_THREE
             else:
                 text_surface = font.render("Erreur Menu", False, (255, 215, 255, 1))
 
@@ -843,6 +1191,8 @@ def main():
 
             if menu == 4:
                 camera = Camera_Position(0, -35, 15, 0, 0, 0)
+            elif menu == 5:
+                camera = Camera_Position(50, 80, 80, 0, 0, 0)
             else:
                 camera = Camera_Position(150,100,50,0,0,0)
             
@@ -876,7 +1226,16 @@ def main():
             button_earth_speed = Button(pygame.Rect(WIDTH-180, 100, 150, 50),
                                 font.render("Menu", False, (255, 255, 255)),
                                 SIM_GRAY, font, text_color=(255, 255, 255))
-            buttons_list = [button_orbit,button_reset,button_time,button_speed,button_plus,button_minus,button_quit,button_earth_speed]
+            SIM_TEAL_G = (0.15, 0.55, 0.50, 1)
+            GRID_ON = True
+            button_grid = Button(pygame.Rect(WIDTH-180, HEIGHT-360, 150, 50),
+                                font.render("Grille ON", False, (255, 255, 255)),
+                                SIM_TEAL_G, font, text_color=(255, 255, 255))
+            SIM_ORANGE_M = (0.85, 0.50, 0.10, 1)
+            button_pause = Button(pygame.Rect(WIDTH-180, HEIGHT-430, 150, 50),
+                                font.render("Pause", False, (255, 255, 255)),
+                                SIM_ORANGE_M, font, text_color=(255, 255, 255))
+            buttons_list = [button_orbit,button_reset,button_time,button_speed,button_plus,button_minus,button_grid,button_pause,button_quit,button_earth_speed]
 
             # Sandbox-specific state and buttons
             SANDBOX_IDLE = 0
@@ -953,8 +1312,11 @@ def main():
                 button_e3d_quit = Button(pygame.Rect(WIDTH-180, 80, 150, 50),
                                     font.render("QUIT", False, (255, 255, 255)),
                                     SIM_RED, font, text_color=(255, 255, 255))
+                button_e3d_pause = Button(pygame.Rect(WIDTH-180, HEIGHT-420, 150, 50),
+                                    font.render("Pause", False, (255, 255, 255)),
+                                    SIM_ORANGE_E, font, text_color=(255, 255, 255))
                 buttons_list = [button_launch, button_rocket, button_e3d_orbit, button_e3d_speed,
-                                button_e3d_plus, button_e3d_minus,
+                                button_e3d_plus, button_e3d_minus, button_e3d_pause,
                                 button_e3d_reset, button_e3d_menu, button_e3d_quit]
                 e3d_launch_mode = False
                 e3d_orbit_on = True
@@ -979,9 +1341,13 @@ def main():
             if (menu == 1):
                 init_earth_moon(tab_planets)
             if (menu == 2):
-                init_planet(tab_planets)
+                today = datetime.date.today()
+                init_planet(tab_planets, today)
+                sim_date = datetime.datetime.combine(today, datetime.time())
             if (menu == 4):
                 init_earth_3d(tab_planets)
+            if (menu == 5):
+                init_three_body(tab_planets, three_corps_mode)
             # menu == 3: start with empty tab_planets
 
             texture = load_image('textures/milky.jpg')
@@ -1098,6 +1464,10 @@ def main():
                                     if SPEED > 9:
                                         SPEED /= 2
                                         button_e3d_speed.update_button("x %.2f" % (SPEED/60), font)
+                                elif button_e3d_pause.hit_test(mouse_x, mouse_y):
+                                    sim_paused = not sim_paused
+                                    button_e3d_pause.update_button("Play" if sim_paused else "Pause", font)
+                                    button_e3d_pause.color = SIM_GREEN if sim_paused else SIM_ORANGE_E
                                 elif button_e3d_reset.hit_test(mouse_x, mouse_y):
                                     tab_planets = reset(tab_planets, menu)
                                     satellites = []
@@ -1133,10 +1503,15 @@ def main():
                                         button_orbit.update_button("ORBIT ON", font)
                                         ORBIT_ON = 1
                                 if button_reset.hit_test(mouse_x, mouse_y):
-                                    tab_planets = reset(tab_planets, menu)
+                                    if menu == 2:
+                                        today = datetime.date.today()
+                                        tab_planets = reset(tab_planets, menu, three_corps_mode, today)
+                                        sim_date = datetime.datetime.combine(today, datetime.time())
+                                    else:
+                                        tab_planets = reset(tab_planets, menu, three_corps_mode)
                                     move = 0
                                     incremented_speed = 1
-                                    camera = Camera_Position(150, 100, 50, 0, 0, 0)
+                                    camera = Camera_Position(50, 80, 80, 0, 0, 0) if menu == 5 else Camera_Position(150, 100, 50, 0, 0, 0)
                                 if button_plus.hit_test(mouse_x, mouse_y):
                                     if SPEED < 500:
                                         SPEED *= 2
@@ -1145,11 +1520,19 @@ def main():
                                     if SPEED > 9:
                                         SPEED /= 2
                                         button_speed.update_button("x %.2f" % (SPEED/60), font)
+                                if button_pause.hit_test(mouse_x, mouse_y):
+                                    sim_paused = not sim_paused
+                                    button_pause.update_button("Play" if sim_paused else "Pause", font)
+                                    button_pause.color = SIM_GREEN if sim_paused else SIM_ORANGE_M
+                                if button_grid.hit_test(mouse_x, mouse_y):
+                                    GRID_ON = not GRID_ON
+                                    button_grid.update_button("Grille ON" if GRID_ON else "Grille OFF", font)
+                                    button_grid.color = SIM_TEAL_G if GRID_ON else SIM_GRAY
                                 if button_quit.hit_test(mouse_x, mouse_y):
                                     run = False
                                     running_menu = False
                                 if button_earth_speed.hit_test(mouse_x, mouse_y):
-                                    tab_planets = reset(tab_planets, menu)
+                                    tab_planets = reset(tab_planets, menu, three_corps_mode)
                                     menu = 0
                                     run = 0
 
@@ -1164,18 +1547,23 @@ def main():
                             button_launch.color = SIM_TEAL_E
 
                 handle_keys(camera)
-                if menu != 3 or not sandbox_paused:
+                paused_now = sandbox_paused if menu == 3 else sim_paused
+                if not paused_now:
                     move += 1
+                    if menu == 2:
+                        sim_date += datetime.timedelta(seconds=TIMESTEP)
 
                 #display info about the simulation elapsed_time since the start of simulation
-                if menu == 1:  
-                    elapsed_time = move / 3600 * 24 *6 
+                if menu == 1:
+                    elapsed_time = move / 3600 * 24 *6
                     button_time.update_button("time : %.1f jours" % elapsed_time,font)
                     # init model view matrix and center it to the earth (center object)
                 elif menu == 2 :
-                    elapsed_time = move / 360 
-                    button_time.update_button("time : %.2f ans" % elapsed_time,font)
+                    button_time.update_button(sim_date.strftime("%d/%m/%Y"), font)
                     # init model view matrix and center it to the earth (center object)
+                elif menu == 5:
+                    elapsed_days = move * TIMESTEP_THREE / 86400
+                    button_time.update_button("temps : %.1f j" % elapsed_days, font)
                 glLoadIdentity()  
                 if menu == 1 :
                     camera_x = tab_planets[0].x  * SCALE
@@ -1183,7 +1571,7 @@ def main():
                     camera_z = tab_planets[0].z  * SCALE        
                     camera.reset_angles()          
                     gluLookAt(camera_x+camera.pos_x, camera_y+camera.pos_y,camera_z+camera.pos_z, camera_x+camera.angle_x, camera_y+camera.angle_y,camera_z+camera.angle_z, 0, 0, 1)
-                elif menu == 2 or menu == 3:
+                elif menu == 2 or menu == 3 or menu == 5:
                     gluLookAt(camera.pos_x+10, camera.pos_y+0,camera.pos_z+20, camera.angle_x, camera.angle_y,camera.angle_z, 0, 0, 1)
                 elif menu == 4:
                     camera.reset_angles()
@@ -1209,21 +1597,44 @@ def main():
                 draw_image(texture)
                 if menu != 4:
                     draw_axys()
-                if menu == 1:
-                    draw_gravity_grid(tab_planets, SCALE, grid_range=120, grid_steps=22, z_scale=80, z_offset=-10)
-                elif menu == 2 or menu == 3:
-                    if tab_planets:
-                        draw_gravity_grid(tab_planets, SCALE, grid_range=300, grid_steps=22, z_scale=200, z_offset=-15)
+                if GRID_ON:
+                    if menu == 1:
+                        draw_gravity_grid(tab_planets, SCALE, grid_range=120, grid_steps=22, z_scale=80, z_offset=-10)
+                    elif menu == 2 or menu == 3:
+                        if tab_planets:
+                            draw_gravity_grid(tab_planets, SCALE, grid_range=300, grid_steps=22, z_scale=200, z_offset=-15)
+                    elif menu == 5:
+                        if tab_planets:
+                            draw_gravity_grid(tab_planets, SCALE, grid_range=80, grid_steps=22, z_scale=120, z_offset=-12)
+                # ── Physics update (synchronized: all forces from snapshot) ──────
+                _n  = adaptive_substeps(tab_planets, TIMESTEP)
+                _dt = TIMESTEP / _n
+
+                if menu == 3:
+                    if not sandbox_paused:
+                        for _ in range(_n):
+                            step_all_synchronized(tab_planets, _dt)
+                        for p in tab_planets:
+                            p.orbit.append((p.x, p.y, p.z))
+                elif menu != 4:
+                    if not sim_paused:
+                        for _ in range(_n):
+                            step_all_synchronized(tab_planets, _dt)
+                        for p in tab_planets:
+                            p.orbit.append((p.x, p.y, p.z))
+                else:
+                    # menu 4: Earth 3D — individual update keeps satellite-mass guard
+                    if not sim_paused:
+                        for planet in tab_planets:
+                            planet.update_position(tab_planets, TIMESTEP)
+
+                # ── Drawing ───────────────────────────────────────────────────────
                 if menu == 1:
                     glEnable(GL_LIGHTING)
                     glEnable(GL_LIGHT0)
-
-                    for planet in tab_planets:  
-                        planet.update_position(tab_planets,TIMESTEP)
+                    for planet in tab_planets:
                         planet.draw(SCALE)
-
-                        if(ORBIT_ON):
-                        #if  planet.sun == 0:
+                        if ORBIT_ON:
                             glDisable(GL_LIGHTING)
                             glDisable(GL_LIGHT0)
                             planet.draw_orbit(SCALE)
@@ -1231,24 +1642,19 @@ def main():
                             glEnable(GL_LIGHT0)
                     glDisable(GL_LIGHTING)
                     glDisable(GL_LIGHT0)
-                
+
                 elif menu == 2:
                     for planet in tab_planets:
-                        planet.update_position(tab_planets,TIMESTEP)
                         planet.draw(SCALE)
-                        if(ORBIT_ON):
+                        if ORBIT_ON:
                             planet.draw_orbit(SCALE)
 
                 elif menu == 3:
                     for planet in tab_planets:
-                        if not sandbox_paused:
-                            planet.update_position(tab_planets, TIMESTEP)
                         planet.draw(SCALE)
                         planet.draw_orbit(SCALE)
-                    # Draw pending planet
                     if sandbox_pending_planet is not None:
                         sandbox_pending_planet.draw(SCALE)
-                    # Draw velocity preview line
                     if sandbox_mode == SANDBOX_PLACING_PLANET_VEL and sandbox_pending_pos is not None and last_modelview is not None:
                         mx, my = pygame.mouse.get_pos()
                         vp = glGetIntegerv(GL_VIEWPORT)
@@ -1267,11 +1673,16 @@ def main():
 
                 elif menu == 4:
                     for planet in tab_planets:
-                        planet.update_position(tab_planets, TIMESTEP)
                         planet.draw(SCALE)
                     if e3d_orbit_on:
                         for sat in satellites:
                             sat.draw_orbit(SCALE)
+
+                elif menu == 5:
+                    for planet in tab_planets:
+                        planet.draw(SCALE)
+                        if ORBIT_ON:
+                            planet.draw_orbit(SCALE)
 
                 # Store matrices for gluUnProject (needed by menu 3 and 4)
                 if menu in (3, 4):
